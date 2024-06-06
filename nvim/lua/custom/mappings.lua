@@ -59,8 +59,8 @@ M.general = {
     ["<leader>sh"] = {
       function()
         local bufnr = vim.api.nvim_get_current_buf()
-        local is_enabled = vim.lsp.inlay_hint.is_enabled(bufnr);
-        vim.lsp.inlay_hint.enable(bufnr, not is_enabled);
+        local is_enabled = vim.lsp.inlay_hint.is_enabled{ bufnr };
+        vim.lsp.inlay_hint.enable(not is_enabled, { bufnr = bufnr });
       end,
       "Toggle inlay hints"
     },
