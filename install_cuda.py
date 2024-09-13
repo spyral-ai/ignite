@@ -20,6 +20,8 @@ import urllib.parse
 
 CUDA_TOOLKIT_URL = "https://developer.download.nvidia.com/compute/cuda/12.5.0/local_installers/cuda_12.5.0_555.42.02_linux.run"
 CUDA_TOOLKIT_CHECKSUM = "0bf587ce20c8e74b90701be56ae2c907"
+# CUDA_TOOLKIT_URL = "https://developer.download.nvidia.com/compute/cuda/12.6.1/local_installers/cuda_12.6.1_560.35.03_linux.run"
+# CUDA_TOOLKIT_CHECKSUM = "a2b81a6811c9a85eccbf90f79613bc4b"
 CUDA_BIN_FOLDER = "/usr/local/cuda-12.5/bin"
 CUDA_LIB_FOLDER = "/usr/local/cuda-12.5/lib64"
 CUDA_PROFILE_FILENAME = pathlib.Path("/etc/profile.d/spyral_cuda_install.sh")
@@ -123,7 +125,7 @@ def download_file(url: str, md5sum: str) -> pathlib.Path:
     return file_path
     
 def get_kernel_version():
-    run("uname -r", silent=True).stdout
+    return run("uname -r", silent=False).stdout
 
 def install_dependencies_debian():
     """
@@ -147,13 +149,13 @@ def install_dependencies_debian():
     packages = run("apt-cache search linux-image").stdout
     patch, micro = max(kernel_package_regex.findall(packages))
 
-    wanted_kernel_version = self.KERNEL_VERSION_FORMAT.format(
+    wanted_kernel_version = KERNEL_VERSION_FORMAT.format(
         major=major, minor=minor, patch=patch, micro=micro
     )
-    wanted_kernel_package = self.KERNEL_IMAGE_PACKAGE.format(
+    wanted_kernel_package = KERNEL_IMAGE_PACKAGE.format(
         version=wanted_kernel_version
     )
-    wanted_kernel_headers = self.KERNEL_HEADERS_PACKAGE.format(
+    wanted_kernel_headers = KERNEL_HEADERS_PACKAGE.format(
         version=wanted_kernel_version
     )
 
