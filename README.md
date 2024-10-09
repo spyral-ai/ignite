@@ -25,3 +25,7 @@ sudo ./install-clang.sh
 # key and use that as the requested password
 ./checkout-repos.sh
 ```
+
+# Troubleshooting
+
+If you have a cuda driver problem (i.e `nvidia-smi` gives an error) then rerun `sudo python3 install_cuda.py install_driver` and reboot.
