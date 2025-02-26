@@ -1,14 +1,6 @@
-use std::{
-    env,
-    fs::{self, File},
-    io::{self, Read, Write},
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
-};
+use std::io;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use md5::{Digest, Md5};
-use tempfile::TempDir;
 
 pub(crate) mod install_clang;
 pub(crate) mod install_cuda;
@@ -25,6 +17,8 @@ fn main() -> io::Result<()> {
     }
 
     let args = Args::parse();
+
+    let home_dir = args.home_dir.unwrap_or("/home/ubuntu".to_string());
 
     match args.command {
         AppCommand::Cuda(cmd) => match cmd {
@@ -44,7 +38,7 @@ fn main() -> io::Result<()> {
             }
         },
         AppCommand::Clang => install_clang::install_clang()?,
-        AppCommand::Nvim => install_nvim::install_nvim()?,
+        AppCommand::Nvim => install_nvim::install_nvim(home_dir)?,
         AppCommand::Rust => install_rust::install_rust()?,
         AppCommand::InstallAll { cuda_version } => {
             println!("Installing all components...");
@@ -61,7 +55,7 @@ fn main() -> io::Result<()> {
 
             // Install Clang and Neovim
             install_clang::install_clang()?;
-            install_nvim::install_nvim()?;
+            install_nvim::install_nvim(home_dir)?;
 
             println!("All components installed successfully!");
         }
@@ -97,6 +91,11 @@ struct Args {
     /// Cloud provider
     #[arg(short, long, value_enum, default_value = "gcp")]
     cloud_provider: CloudProvider,
+
+    /// The user home dir. If not specified, this will default
+    /// to `/home/ubuntu'
+    #[arg(short, long)]
+    home_dir: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

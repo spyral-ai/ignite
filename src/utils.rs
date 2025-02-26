@@ -1,8 +1,10 @@
 use std::{
-    io,
+    io::{self, Write},
+    path::PathBuf,
     process::{Command, ExitStatus, Stdio},
 };
 
+#[allow(unused_assignments)]
 pub(crate) fn run(
     command: &str,
     check: bool,
@@ -76,7 +78,7 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
         run(&format!("curl -fSsL -O {}", url), true, None, false, 0)?;
     }
 
-    let (status, stdout, _) = run(
+    let (_status, stdout, _) = run(
         &format!("md5sum {}", file_path.display()),
         true,
         None,
