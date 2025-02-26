@@ -39,18 +39,14 @@ fn main() -> io::Result<()> {
         },
         AppCommand::Clang => install_clang::install_clang()?,
         AppCommand::Nvim => install_nvim::install_nvim(home_dir)?,
-        AppCommand::Rust => install_rust::install_rust()?,
+        AppCommand::Rust => install_rust::install_rust(home_dir)?,
         AppCommand::InstallAll { cuda_version } => {
             println!("Installing all components...");
 
             // Install Rust first
-            install_rust::install_rust()?;
+            install_rust::install_rust(home_dir.clone())?;
 
-            // Install CUDA driver and toolkit
-            install_cuda::install_driver(args.cloud_provider, cuda_version)?;
-            // Note: After driver installation, a reboot is typically required
-            // The script will exit after reboot, so the following commands won't run until
-            // the script is run again after reboot
+            // This will install the driver first.
             install_cuda::install_cuda(args.cloud_provider, cuda_version)?;
 
             // Install Clang and Neovim

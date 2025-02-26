@@ -1,6 +1,6 @@
 use std::{
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
 };
 
@@ -91,20 +91,26 @@ pub(crate) fn run_with_options(
 }
 
 pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
-    let url_path = url.split('/').last().unwrap_or("download");
-    let file_path = PathBuf::from(url_path);
+    let filename = url.split('/').next_back().unwrap_or("downloaded_file");
+    let dest_path = format!("/tmp/{}", filename);
 
-    if !file_path.exists() {
-        run_with_options(&format!("curl -fSsL -O {}", url), true, None, false, 0)?;
+    let file_path = Path::new(&dest_path);
+    if file_path.exists() {
+        println!("File {dest_path} already exists, skipping download.");
+        return Ok(dest_path.into());
     }
 
-    let (_status, stdout, _) = run_with_options(
-        &format!("md5sum {}", file_path.display()),
+    println!("Downloading {url} to {dest_path} ...");
+    run_with_options(
+        &format!("curl -fsSL -o {dest_path} {url}"),
         true,
         None,
-        true,
+        false,
         0,
     )?;
+
+    let (_status, stdout, _) =
+        run_with_options(&format!("md5sum {dest_path}"), true, None, true, 0)?;
     let checksum = stdout.split_whitespace().next().unwrap_or("");
 
     if checksum != md5sum {
@@ -112,13 +118,12 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
             io::ErrorKind::Other,
             format!(
                 "The installer file checksum does not match. Won't continue installation. \
-                Try deleting {} and trying again.",
-                file_path.display()
+                Try deleting {dest_path} and trying again.",
             ),
         ));
     }
 
-    Ok(file_path)
+    Ok(dest_path.into())
 }
 
 pub(crate) fn get_kernel_version() -> io::Result<String> {
@@ -136,7 +141,7 @@ pub(crate) fn parse_kernel_package(
         return None;
     }
 
-    // Extract the version part (e.g., "5.15.0-1015" from "linux-image-5.15.0-1015-aws")
+    // Extract the patch and micro (e.g., ".0-1015" from "linux-image-5.15.0-1015-aws")
     let version_part = package
         .strip_prefix(prefix)
         .and_then(|s| s.strip_suffix(suffix))
@@ -147,19 +152,13 @@ pub(crate) fn parse_kernel_package(
             })
         })?;
 
-    // Split by "-" to get major.minor.patch and micro
+    // Split by "-" to .patch and micro
     let parts: Vec<&str> = version_part.split('-').collect();
     if parts.len() != 2 {
         return None;
     }
 
-    // Get the patch from major.minor.patch
-    let version_numbers: Vec<&str> = parts[0].split('.').collect();
-    if version_numbers.len() < 3 {
-        return None;
-    }
-
-    let patch = version_numbers[2].parse::<usize>().ok()?;
+    let patch = parts[0].strip_prefix(".").unwrap().parse::<usize>().ok()?;
     let micro = parts[1].parse::<usize>().ok()?;
 
     Some((patch, micro))
@@ -169,12 +168,9 @@ pub(crate) fn lock_kernel_updates_debian() -> io::Result<()> {
     println!("Locking kernel updates ...");
 
     let kernel_version = get_kernel_version()?;
-    run(
-        &format!(
-            "apt-mark hold linux-image-{} linux-headers-{} linux-image-cloud-amd64 linux-headers-cloud-amd64",
-            kernel_version, kernel_version
-        )
-    )?;
+    run(&format!(
+        "apt-mark hold linux-image-{kernel_version} linux-headers-{kernel_version}",
+    ))?;
 
     Ok(())
 }
@@ -183,12 +179,9 @@ pub(crate) fn unlock_kernel_updates_debian() -> io::Result<()> {
     println!("Unlocking kernel updates...");
 
     let kernel_version = get_kernel_version()?;
-    run(
-        &format!(
-            "apt-mark unhold linux-image-{} linux-headers-{} linux-image-cloud-amd64 linux-headers-cloud-amd64",
-            kernel_version, kernel_version
-        )
-    )?;
+    run(&format!(
+        "apt-mark unhold linux-image-{kernel_version} linux-headers-{kernel_version}",
+    ))?;
 
     Ok(())
 }

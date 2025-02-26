@@ -1,13 +1,11 @@
 use std::{
     env,
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
 };
 
-use clap::{Parser, ValueEnum};
-use md5::{Digest, Md5};
+use clap::ValueEnum;
 use tempfile::TempDir;
 
 use crate::{utils::*, CloudProvider};
@@ -22,7 +20,6 @@ struct RebootRequired;
 pub enum CudaVersion {
     V12_5,
     V12_6,
-    V12_7,
     V12_8,
 }
 
@@ -31,7 +28,6 @@ impl std::fmt::Display for CudaVersion {
         match self {
             CudaVersion::V12_5 => write!(f, "12.5"),
             CudaVersion::V12_6 => write!(f, "12.6"),
-            CudaVersion::V12_7 => write!(f, "12.7"),
             CudaVersion::V12_8 => write!(f, "12.8"),
         }
     }
@@ -59,24 +55,17 @@ impl CudaConfig {
             },
             CudaVersion::V12_6 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_535.161.07_linux.run"),
-                toolkit_checksum: String::from("a4d6d4f1e9b3e9c1a7c9b9c9e9b9e9c9"),  // Replace with actual checksum
+                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.28.03_linux.run"),
+                toolkit_checksum: String::from("8685a58497b0c7e5d964e6da7968bb1e"),
                 bin_folder: String::from("/usr/local/cuda-12.6/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.6/lib64"),
                 driver_version: String::from("535.161.07"),
             },
-            CudaVersion::V12_7 => Self {
-                version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.7.0/local_installers/cuda_12.7.0_545.23.08_linux.run"),
-                toolkit_checksum: String::from("b4d6d4f1e9b3e9c1a7c9b9c9e9b9e9c9"),  // Replace with actual checksum
-                bin_folder: String::from("/usr/local/cuda-12.7/bin"),
-                lib_folder: String::from("/usr/local/cuda-12.7/lib64"),
-                driver_version: String::from("545.23.08"),
-            },
+
             CudaVersion::V12_8 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_550.54.14_linux.run"),
-                toolkit_checksum: String::from("c4d6d4f1e9b3e9c1a7c9b9c9e9b9e9c9"),  // Replace with actual checksum
+                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"),
+                toolkit_checksum: String::from("c71027cf1a4ce84f80b9cbf81116e767"),
                 bin_folder: String::from("/usr/local/cuda-12.8/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.8/lib64"),
                 driver_version: String::from("550.54.14"),
@@ -104,13 +93,10 @@ pub(crate) fn install_driver(
     println!("Installing GPU drivers for CUDA {}...", cuda_version);
 
     let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
-    run(
-        &format!("sh {} --silent --driver", installer_path.display()),
-        true,
-        None,
-        false,
-        0,
-    )?;
+    run(&format!(
+        "sh {} --silent --driver",
+        installer_path.display()
+    ))?;
 
     if verify_driver(true)? {
         lock_kernel_updates_debian()?;
@@ -134,17 +120,11 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
     let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
 
     println!("Extracting NVIDIA driver installer, to complete uninstallation...");
-    run(
-        &format!(
-            "sh {} --extract={}",
-            installer_path.display(),
-            temp_dir.path().display()
-        ),
-        true,
-        None,
-        false,
-        0,
-    )?;
+    run(&format!(
+        "sh {} --extract={}",
+        installer_path.display(),
+        temp_dir.path().display()
+    ))?;
 
     let installer_path = temp_dir.path().join(format!(
         "NVIDIA-Linux-x86_64-{}.run",
@@ -152,13 +132,7 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
     ));
 
     println!("Starting uninstallation...");
-    run(
-        &format!("sh {} -s --uninstall", installer_path.display()),
-        true,
-        None,
-        false,
-        0,
-    )?;
+    run(&format!("sh {} -s --uninstall", installer_path.display()))?;
 
     println!("Uninstallation completed!");
     unlock_kernel_updates_debian()?;
@@ -167,7 +141,7 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
 }
 
 pub(crate) fn verify_driver(verbose: bool) -> io::Result<bool> {
-    let (status, _, _) = run("which nvidia-smi", false, None, true, 0)?;
+    let (status, _, _) = run_with_options("which nvidia-smi", false, None, true, 0)?;
 
     if !status.success() {
         if verbose {
@@ -176,7 +150,7 @@ pub(crate) fn verify_driver(verbose: bool) -> io::Result<bool> {
         return Ok(false);
     }
 
-    let (status, stdout, stderr) = run("nvidia-smi -L", false, None, true, 0)?;
+    let (status, stdout, stderr) = run_with_options("nvidia-smi -L", false, None, true, 0)?;
     let success = status.success() && stdout.contains("UUID");
 
     if verbose {
@@ -194,7 +168,6 @@ pub(crate) fn install_cuda(
         Ok(_) => Ok(()),
         Err(RebootRequired) => {
             reboot();
-            Ok(()) // This line is never reached due to reboot
         }
     }
 }
@@ -213,16 +186,21 @@ fn install_cuda_inner(
         install_driver(cloud_provider, cuda_version).unwrap();
     }
 
+    if Path::new(&format!("{}/nvcc", cuda_config.bin_folder)).exists() {
+        println!(
+            "Nvcc already installed at : {}/nvcc, not installing CUDA",
+            cuda_config.bin_folder
+        );
+        return Ok(());
+    }
+
     let installer_path = download_cuda_toolkit_installer(&cuda_config).unwrap();
 
     println!("Installing CUDA {} toolkit...", cuda_version);
-    run(
-        &format!("sh {} --silent --toolkit", installer_path.display()),
-        true,
-        None,
-        false,
-        0,
-    )
+    run(&format!(
+        "sh {} --silent --toolkit",
+        installer_path.display()
+    ))
     .unwrap();
     println!("CUDA toolkit installation completed!");
 
@@ -239,24 +217,27 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     let kernel_version_format = format!("{{major}}.{{minor}}.{{patch}}-{{micro}}{}", kernel_suffix);
     let kernel_headers_package = "linux-headers-{version}";
 
-    run("apt-get update", true, None, false, 0).unwrap();
+    run("apt-get update").unwrap();
 
     let kernel_version = get_kernel_version().unwrap();
     let mut version_parts = kernel_version.split('.');
     let major = version_parts.next().unwrap();
     let minor = version_parts.next().unwrap();
+    println!("Major: {major}, minor: {minor}");
 
     // Get all available linux-image packages
-    let (_, packages, _) = run("apt-cache search linux-image", true, None, false, 0).unwrap();
+    let (_, packages, _) = run("apt-cache search linux-image").unwrap();
 
     // Find the newest version matching our major.minor
     let prefix = format!("linux-image-{}.{}", major, minor);
+    println!("Searching for prefix: {prefix}");
 
     let mut max_patch = 0;
     let mut max_micro = 0;
 
     for line in packages.lines() {
         let package_name = line.split_whitespace().next().unwrap_or("");
+        println!("Package: {package_name}");
         if let Some((patch, micro)) = parse_kernel_package(package_name, &prefix, kernel_suffix) {
             if patch > max_patch || (patch == max_patch && micro > max_micro) {
                 max_patch = patch;
@@ -270,6 +251,7 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
         .replace("{minor}", minor)
         .replace("{patch}", &max_patch.to_string())
         .replace("{micro}", &max_micro.to_string());
+    println!("Wanted kernel version: {wanted_kernel_version}");
 
     let wanted_kernel_package = kernel_image_package.replace("{version}", &wanted_kernel_version);
     let wanted_kernel_headers = kernel_headers_package.replace("{version}", &wanted_kernel_version);
@@ -280,7 +262,7 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
         current_kernel.contains(&format!("{}.{}.{}-{}", major, minor, max_patch, max_micro));
 
     // Check if the headers are already installed
-    let (status, _, _) = run(
+    let (status, _, _) = run_with_options(
         &format!("dpkg -l | grep {}", wanted_kernel_headers),
         false,
         None,
@@ -297,16 +279,10 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     }
 
     // Install the packages
-    run(
-        &format!(
-            "apt-get install -y make gcc {} {} software-properties-common pciutils gcc make dkms",
-            wanted_kernel_package, wanted_kernel_headers
-        ),
-        true,
-        None,
-        false,
-        0,
-    )
+    run(&format!(
+        "apt-get install -y make gcc {} {} software-properties-common pciutils gcc make dkms",
+        wanted_kernel_package, wanted_kernel_headers
+    ))
     .unwrap();
 
     // Reboot is needed only if we installed a new kernel
@@ -345,15 +321,9 @@ fn configure_persistanced_service() -> io::Result<()> {
     let current_dir = env::current_dir()?;
     env::set_current_dir(temp_dir.path())?;
 
-    run("tar -xf installer.tar.bz2", true, None, true, 0)?;
+    run_with_options("tar -xf installer.tar.bz2", true, None, true, 0)?;
     println!("Executing nvidia-persistenced installer...");
-    run(
-        "sh nvidia-persistenced-init/install.sh",
-        true,
-        None,
-        false,
-        0,
-    )?;
+    run("sh nvidia-persistenced-init/install.sh")?;
 
     env::set_current_dir(current_dir)?;
     Ok(())
