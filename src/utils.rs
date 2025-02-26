@@ -4,8 +4,28 @@ use std::{
     process::{Command, ExitStatus, Stdio},
 };
 
+/// Runs the `command`, with no retries, and checks whether or not the command executed
+/// successfuly.
+///
+/// This returns the status of the command, and the content of stdout and stderr, respectively.
+///
+/// For more control, use [`run_with_options`].
+pub(crate) fn run(command: &str) -> io::Result<(ExitStatus, String, String)> {
+    run_with_options(command, true, None, false, 0)
+}
+
+/// Runs the `command` with the provided options.
+///
+/// This returns the status of the command, and the content of stdout and stderr, respectively.
+///
+/// # Arguments
+///
+/// - `check` - Whether or not the output of the command is checked.
+/// - `input` - Input to the command.
+/// - `silent` - If the command output must be supressed.
+/// - `retries` - The number of times to retry the command.
 #[allow(unused_assignments)]
-pub(crate) fn run(
+pub(crate) fn run_with_options(
     command: &str,
     check: bool,
     input: Option<&str>,
@@ -75,10 +95,10 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
     let file_path = PathBuf::from(url_path);
 
     if !file_path.exists() {
-        run(&format!("curl -fSsL -O {}", url), true, None, false, 0)?;
+        run_with_options(&format!("curl -fSsL -O {}", url), true, None, false, 0)?;
     }
 
-    let (_status, stdout, _) = run(
+    let (_status, stdout, _) = run_with_options(
         &format!("md5sum {}", file_path.display()),
         true,
         None,
@@ -102,7 +122,7 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn get_kernel_version() -> io::Result<String> {
-    let (_, stdout, _) = run("uname -r", true, None, false, 0)?;
+    let (_, stdout, _) = run("uname -r")?;
     Ok(stdout.trim().to_string())
 }
 
@@ -153,11 +173,7 @@ pub(crate) fn lock_kernel_updates_debian() -> io::Result<()> {
         &format!(
             "apt-mark hold linux-image-{} linux-headers-{} linux-image-cloud-amd64 linux-headers-cloud-amd64",
             kernel_version, kernel_version
-        ),
-        true,
-        None,
-        false,
-        0,
+        )
     )?;
 
     Ok(())
@@ -171,11 +187,7 @@ pub(crate) fn unlock_kernel_updates_debian() -> io::Result<()> {
         &format!(
             "apt-mark unhold linux-image-{} linux-headers-{} linux-image-cloud-amd64 linux-headers-cloud-amd64",
             kernel_version, kernel_version
-        ),
-        true,
-        None,
-        false,
-        0,
+        )
     )?;
 
     Ok(())
@@ -185,6 +197,6 @@ pub(crate) fn reboot() -> ! {
     println!("The system needs to be rebooted to complete the installation process.");
     println!("The process will be continued after the reboot.");
 
-    run("reboot now", true, None, false, 0).unwrap();
+    run("reboot now").unwrap();
     std::process::exit(0);
 }
