@@ -1,59 +1,68 @@
-use crate::utils::run;
-use std::{env, io};
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::Path,
+};
 
-pub fn install_rust() -> io::Result<()> {
+use crate::utils::run;
+
+pub fn install_rust(home_dir: String) -> io::Result<()> {
+    if Path::new(&format!("{home_dir}/.cargo/bin")).exists() {
+        println!("Rust is already installed. Skipping installation.");
+        return Ok(());
+    }
+
     println!("Installing Rust...");
 
     // Install dependencies
-    run("apt-get update", true, None, false, 0)?;
-    run(
-        "apt-get install -y curl build-essential",
-        true,
-        None,
-        false,
-        0,
-    )?;
+    run("apt-get update")?;
+    run("apt-get install -y curl build-essential")?;
 
     // Download and run rustup installer
     println!("Downloading and running rustup installer...");
+    run("curl -tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/sh.rustup.rs")?;
+    run("sh /tmp/sh.rustup.rs -y")?;
 
-    // Get the current user to run rustup as
-    let current_user = if let Ok(sudo_user) = env::var("SUDO_USER") {
-        sudo_user
-    } else {
-        String::from("root")
-    };
+    // Get the home directory and sudo user
+    let sudo_user = env::var("SUDO_USER").unwrap_or_else(|_| String::from(""));
 
-    // Run rustup installer with default settings
-    run(
-        &format!(
-            "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | su - {} -c 'sh -s -- -y'",
-            current_user
-        ),
-        true,
-        None,
-        false,
-        0,
-    )?;
+    // Add Cargo to PATH permanently by updating shell configuration files
+    println!("Adding Cargo to PATH...");
+    let config_file = format!("{}/.bashrc", home_dir);
+    if Path::new(&config_file).exists() {
+        // Check if the PATH entry already exists
+        let content = fs::read_to_string(&config_file)?;
+        if !content.contains(".cargo/bin") {
+            println!("Updating {config_file}");
+            let mut file = fs::OpenOptions::new().append(true).open(&config_file)?;
 
-    // Add Rust to PATH for the current session
-    let home_dir = if current_user == "root" {
-        String::from("/root")
-    } else {
-        format!("/home/{}", current_user)
-    };
+            writeln!(file, "\n# Add Rust's cargo to PATH")?;
+            writeln!(file, "export PATH=\"$HOME/.cargo/bin:$PATH\"")?;
 
-    // Source the cargo env file to update PATH
-    run(
-        &format!("su - {} -c 'source {0}/.cargo/env'", current_user, home_dir),
-        false, // Don't check exit status as 'source' is a shell builtin
-        None,
-        false,
-        0,
-    )?;
+            run(&format!("source {config_file}"))?;
+        }
+    }
+
+    // Fix permissions if running as root for a regular user
+    if !sudo_user.is_empty() {
+        println!("Setting correct ownership for Rust installation...");
+        run(&format!(
+            "chown -R {sudo_user}:{sudo_user} {home_dir}/.cargo"
+        ))?;
+
+        // Also fix permissions for the shell config files
+        if Path::new(&config_file).exists() {
+            run(&format!("chown {sudo_user}:{sudo_user} {config_file}"))?;
+        }
+    }
+
+    let rustup_path = format!("{home_dir}/.cargo/bin/rustup");
+    println!("Installing rust components, rustup path: {rustup_path} ...");
+    run(&format!("{rustup_path} toolchain install nightly"))?;
+    run(&format!("{rustup_path} default nightly"))?;
+    run(&format!("{rustup_path} component add rust-analyzer"))?;
 
     println!("Rust installation completed successfully!");
-    println!("Note: You may need to restart your shell or run 'source ~/.cargo/env' to use Rust.");
 
     Ok(())
 }
