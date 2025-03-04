@@ -112,7 +112,7 @@ enum AppCommand {
     /// Install all components (Rust, CUDA, Clang, Neovim)
     InstallAll {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v12_8")]
+        #[arg(short, long, value_enum, default_value = "v12-8")]
         cuda_version: CudaVersion,
     },
 }
@@ -122,21 +122,21 @@ enum CudaCommand {
     /// Install NVIDIA GPU driver
     InstallDriver {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v12_8")]
+        #[arg(short, long, value_enum, default_value = "v12-8")]
         version: CudaVersion,
     },
 
     /// Install CUDA toolkit
     InstallCuda {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v12_8")]
+        #[arg(short, long, value_enum, default_value = "v12-8")]
         version: CudaVersion,
     },
 
     /// Uninstall NVIDIA GPU driver
     UninstallDriver {
         /// CUDA version to uninstall
-        #[arg(short, long, value_enum, default_value = "v12_8")]
+        #[arg(short, long, value_enum, default_value = "v12-8")]
         version: CudaVersion,
     },
 
