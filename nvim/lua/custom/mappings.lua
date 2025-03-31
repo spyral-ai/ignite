@@ -111,7 +111,25 @@ M.general = {
         buffer = vim.api.nvim_get_current_buf()
 
       }
-    }
+    },
+
+    -- Open code codecompanion actions
+    ["<leader>cca"] = {
+      "<cmd> CodeCompanionActions <cr>",
+      "Open code companion actions"
+    },
+
+    -- Open code codecompanion
+    ["<C-m>"] = {
+      "<cmd> CodeCompanion <cr>",
+      "Open code companion"
+    },
+
+    -- Open code codecompanion chat
+    ["<leader>cc"] = {
+      "<cmd> CodeCompanionChat <cr>",
+      "Open code companion chat"
+    },
   },
   v = {
     [">"] = { ">gv", "indent"},
