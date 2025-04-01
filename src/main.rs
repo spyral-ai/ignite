@@ -37,10 +37,13 @@ fn main() -> io::Result<()> {
                 }
             }
         },
-        AppCommand::Clang => install_clang::install_clang()?,
+        AppCommand::Clang { version } => install_clang::install_clang(version.as_usize())?,
         AppCommand::Nvim => install_nvim::install_nvim(home_dir)?,
         AppCommand::Rust => install_rust::install_rust(home_dir)?,
-        AppCommand::InstallAll { cuda_version } => {
+        AppCommand::InstallAll {
+            cuda_version,
+            clang_version,
+        } => {
             println!("Installing all components...");
 
             // Install Rust first
@@ -50,7 +53,7 @@ fn main() -> io::Result<()> {
             install_cuda::install_cuda(args.cloud_provider, cuda_version)?;
 
             // Install Clang and Neovim
-            install_clang::install_clang()?;
+            install_clang::install_clang(clang_version.as_usize())?;
             install_nvim::install_nvim(home_dir)?;
 
             println!("All components installed successfully!");
@@ -73,6 +76,25 @@ impl CloudProvider {
             CloudProvider::Aws => "-aws",
             CloudProvider::Gcp => "-cloud-amd64",
             CloudProvider::Azure => "-azure",
+        }
+    }
+}
+
+/// Clang versions that are supported. We use an enum here so that the user doesn't specify an
+/// arbitrary number,
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ClangVersion {
+    V15,
+    V16,
+    V17,
+}
+
+impl ClangVersion {
+    pub fn as_usize(&self) -> usize {
+        match self {
+            ClangVersion::V15 => 15,
+            ClangVersion::V16 => 16,
+            ClangVersion::V17 => 17,
         }
     }
 }
@@ -101,7 +123,11 @@ enum AppCommand {
     Cuda(CudaCommand),
 
     /// Install Clang
-    Clang,
+    Clang {
+        /// Clang version to install
+        #[arg(short, long, value_enum, default_value = "v17")]
+        version: ClangVersion,
+    },
 
     /// Install Neovim
     Nvim,
@@ -114,6 +140,10 @@ enum AppCommand {
         /// CUDA version to install
         #[arg(short, long, value_enum, default_value = "v12-8")]
         cuda_version: CudaVersion,
+
+        /// Clang version to install
+        #[arg(long, value_enum, default_value = "v17")]
+        clang_version: ClangVersion,
     },
 }
 
