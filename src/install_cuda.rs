@@ -21,6 +21,7 @@ pub enum CudaVersion {
     V12_5,
     V12_6,
     V12_8,
+    V13_0_1,
 }
 
 impl std::fmt::Display for CudaVersion {
@@ -29,6 +30,7 @@ impl std::fmt::Display for CudaVersion {
             CudaVersion::V12_5 => write!(f, "12.5"),
             CudaVersion::V12_6 => write!(f, "12.6"),
             CudaVersion::V12_8 => write!(f, "12.8"),
+            CudaVersion::V13_0_1 => write!(f, "13.0.1"),
         }
     }
 }
@@ -70,6 +72,14 @@ impl CudaConfig {
                 lib_folder: String::from("/usr/local/cuda-12.8/lib64"),
                 driver_version: String::from("550.54.14"),
             },
+            CudaVersion::V13_0_1 => Self {
+                version,
+                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/13.0.1/local_installers/cuda_13.0.1_580.82.07_linux.run"),
+                toolkit_checksum: String::from("8c56e3cb1ab74370aafed5a4600bc5bc"),
+                bin_folder: String::from("/usr/local/cuda-13.0.1/bin"),
+                lib_folder: String::from("/usr/local/cuda-13.0.1/lib64"),
+                driver_version: String::from("580.82.07")
+            }
         }
     }
 }
