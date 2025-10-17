@@ -5,15 +5,49 @@ local capabilities = require("plugins.configs.lspconfig").capabilities
 local lspconfig = require "lspconfig"
 local util = require "lspconfig/util"
 
--- if you just want default config for the servers then put them in a table
+-- Define servers that don’t need special setup
 local servers = { "html", "cssls", "tsserver" }
 
+-- Register standard servers using the new API
 for _, lsp in ipairs(servers) do
-  lspconfig[lsp].setup {
+  vim.lsp.config(lsp, {
     on_attach = on_attach,
     capabilities = capabilities,
-  }
+  })
 end
+
+-- GLSL analyzer setup
+vim.lsp.config("glsl_analyzer", {
+  on_attach = on_attach,
+  capabilities = capabilities,
+  filetypes = { "glsl", "vert", "tesc", "tese", "frag", "geom", "comp" },
+  single_file_support = true,
+  cmd = { "/opt/glsl_analyzer/bin/glsl_analyzer" },
+})
+
+-- Clangd setup
+vim.lsp.config("clangd", {
+  on_attach = on_attach,
+  capabilities = capabilities,
+  filetypes = { "c", "cpp", "objective-c", "objective-cpp", "metal", "cuda", "msl" },
+  root_dir = vim.fs.root(0, {
+    ".clangd",
+    ".clang-tidy",
+    ".clang-format",
+    "compile_commands.json",
+    "compile_flags.txt",
+    ".git",
+  }),
+})
+
+-- Enable all servers (Neovim 0.11+)
+vim.lsp.enable {
+  "html",
+  "cssls",
+  "tsserver",
+  "glsl_analyzer",
+  "clangd",
+}
 
 -- Global mappings.
 -- See `:help vim.diagnostic.*` for documentation on any of the below functions
@@ -30,44 +64,3 @@ vim.keymap.set(
   end,
   {silent = true, buffer = bufnr}
 )
-
-lspconfig["glsl_analyzer"].setup {
-  on_attach = on_attach,
-  capabilities = capabilities,
-  filetypes = { "glsl", "vert", "tesc", "tese", "frag", "geom", "comp" },
-  single_file_support = true,
-  cmd = {"/opt/glsl_analyzer/bin/glsl_analyzer" }
-}
-
-lspconfig["clangd"].setup {
-  on_attach = on_attach,
-  capabilities = capabilities,
-  filetypes = { "c", "cpp", "objective-c", "objective-cpp", "metal", "cuda", "metal", "msl" },
-  root_dir =  util.root_pattern(
-      '.clangd',
-      '.clang-tidy',
-      '.clang-format',
-      'compile_commands.json',
-      'compile_flags.txt',
-      '.git'
-    )
-}
-
--- 
--- Setup rust_analyzer
--- lspconfig["rust_analyzer"].setup {
---   on_attach = on_attach,
---   capabilities = capabilities,
---   filetypes = {"rust"},
---   root_dir = util.root_pattern("Cargo.toml"),
---   setings = {
---     ['rust-analyzer'] = {
---       cargo = {
---         allFeatures = true,
---       },
---       diagnostics = {
---         enable = false;
---       }
---     }
---   }
--- }
