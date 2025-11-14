@@ -30,23 +30,18 @@ pub fn install_nvim(home_dir: String) -> io::Result<()> {
     run("tar -xzf /tmp/nvim-repo.tar.gz -C /tmp/nvim-extract --strip-components=1")?;
 
     // Copy only the nvim directory to the config location
-    run(&format!("cp -r /tmp/nvim-extract/nvim {}", config_dir))?;
+    println!("Copying nvim from /tmp/nvim-extract to {config_dir}");
+    run(&format!("cp -r /tmp/nvim-extract/nvim {config_dir}"))?;
 
     // Fix permissions if running as root for a regular user
     if !sudo_user.is_empty() {
         println!("Setting correct ownership for Neovim configuration...");
-        run(&format!(
-            "chown -R {}:{} {}",
-            sudo_user, sudo_user, config_dir
-        ))?;
+        run(&format!("chown -R {sudo_user}:{sudo_user} {config_dir}"))?;
 
         // Also fix permissions for the vim-plug directory that will be created
-        let plug_dir = format!("{}/.local/share/nvim", home_dir);
+        let plug_dir = format!("{home_dir}/.local/share/nvim");
         if Path::new(&plug_dir).exists() {
-            run(&format!(
-                "chown -R {}:{} {}",
-                sudo_user, sudo_user, plug_dir
-            ))?;
+            run(&format!("chown -R {sudo_user}:{sudo_user} {plug_dir}"))?;
         }
     }
 
@@ -56,19 +51,15 @@ pub fn install_nvim(home_dir: String) -> io::Result<()> {
 
     // Install vim-plug
     run(&format!(
-        "curl -fLo {}/.local/share/nvim/site/autoload/plug.vim --create-dirs \
-            https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim",
-        home_dir
+        "curl -fLo {home_dir}/.local/share/nvim/site/autoload/plug.vim --create-dirs \
+        https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim"
     ))?;
 
     // After installing vim-plug, fix its permissions too
     if !sudo_user.is_empty() {
-        let plug_dir = format!("{}/.local/share/nvim", home_dir);
+        let plug_dir = format!("{home_dir}/.local/share/nvim");
         if Path::new(&plug_dir).exists() {
-            run(&format!(
-                "chown -R {}:{} {}",
-                sudo_user, sudo_user, plug_dir
-            ))?;
+            run(&format!("chown -R {sudo_user}:{sudo_user} {plug_dir}"))?;
         }
     }
 
