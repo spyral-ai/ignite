@@ -1,22 +1,17 @@
 local on_attach = require("plugins.configs.lspconfig").on_attach
 local capabilities = require("plugins.configs.lspconfig").capabilities
- -- local utils = require("core.util")
 
-local lspconfig = require "lspconfig"
-local util = require "lspconfig/util"
-
--- Define servers that don’t need special setup
+-- Servers with simple default config
 local servers = { "html", "cssls", "tsserver" }
 
--- Register standard servers using the new API
-for _, lsp in ipairs(servers) do
-  vim.lsp.config(lsp, {
+for _, server in ipairs(servers) do
+  vim.lsp.config(server, {
     on_attach = on_attach,
     capabilities = capabilities,
   })
 end
 
--- GLSL analyzer setup
+-- GLSL analyzer
 vim.lsp.config("glsl_analyzer", {
   on_attach = on_attach,
   capabilities = capabilities,
@@ -25,11 +20,13 @@ vim.lsp.config("glsl_analyzer", {
   cmd = { "/opt/glsl_analyzer/bin/glsl_analyzer" },
 })
 
--- Clangd setup
+-- Clangd
 vim.lsp.config("clangd", {
   on_attach = on_attach,
   capabilities = capabilities,
-  filetypes = { "c", "cpp", "objective-c", "objective-cpp", "metal", "cuda", "msl" },
+  filetypes = {
+    "c", "cpp", "objective-c", "objective-cpp", "metal", "cuda", "msl"
+  },
   root_dir = vim.fs.root(0, {
     ".clangd",
     ".clang-tidy",
@@ -40,7 +37,7 @@ vim.lsp.config("clangd", {
   }),
 })
 
--- Enable all servers (Neovim 0.11+)
+-- Enable these servers globally
 vim.lsp.enable {
   "html",
   "cssls",
@@ -49,18 +46,18 @@ vim.lsp.enable {
   "clangd",
 }
 
--- Global mappings.
--- See `:help vim.diagnostic.*` for documentation on any of the below functions
+-- Diagnostics keymaps
 vim.keymap.set('n', '<leader>e', vim.diagnostic.open_float)
 vim.keymap.set('n', '[d', vim.diagnostic.goto_prev)
 vim.keymap.set('n', ']d', vim.diagnostic.goto_next)
 
+-- Rust code actions (if needed)
 local bufnr = vim.api.nvim_get_current_buf()
 vim.keymap.set(
-  'n', 
-  '<leader>a', 
+  'n',
+  '<leader>a',
   function()
     vim.cmd.RustLsp('codeAction')
   end,
-  {silent = true, buffer = bufnr}
+  { silent = true, buffer = bufnr }
 )

@@ -41,6 +41,7 @@ M.capabilities.textDocument.completion.completionItem = {
 vim.lsp.config("lua_ls", {
   on_attach = M.on_attach,
   capabilities = M.capabilities,
+
   settings = {
     Lua = {
       diagnostics = {
