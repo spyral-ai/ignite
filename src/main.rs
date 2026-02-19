@@ -54,7 +54,7 @@ fn main() -> io::Result<()> {
 
             // Install Clang and Neovim
             install_clang::install_clang(clang_version.as_usize())?;
-            install_nvim::install_nvim(home_dir)?;
+            //install_nvim::install_nvim(home_dir)?;
 
             println!("All components installed successfully!");
         }

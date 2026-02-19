@@ -8,3 +8,5 @@ source $HOME/.cargo.env
 rustup toolchain install nightly
 rustup default nightly
 rustup component add rust-analyzer
+
+source ~/.bashrc

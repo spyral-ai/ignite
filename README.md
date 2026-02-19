@@ -28,6 +28,15 @@ Options:
 
 Alternatively, if you want to compile the binary and then run it, you can use the `setup.sh` script which will install rust, and then you can build the binary with `cargo build --release` and then run the executable as above.
 
+# Minimal setup
+
+1) Run `source setup.sh` to install rust. You **may** need to run `source `~/.bashrc`.
+2) Build the binary with `cargo build --release`.
+3) Install the cuda driver with `./target/release/ignite --cloud-provider <aws|gcp> cuda instal-driver. This will require a reboot.
+4) Install cuda with `./target/release/ignite cuda install-cuda.
+
+Then you are good to go.
+
 # Checking out repositories
 
 You can check out the repositories using the `checkout-repos.sh` script, which will download all the development repositories to `~/Spyral`.

@@ -61,7 +61,7 @@ impl CudaConfig {
                 toolkit_checksum: String::from("8685a58497b0c7e5d964e6da7968bb1e"),
                 bin_folder: String::from("/usr/local/cuda-12.6/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.6/lib64"),
-                driver_version: String::from("535.161.07"),
+                driver_version: String::from("560.28.03"),
             },
 
             CudaVersion::V12_8 => Self {
@@ -218,7 +218,7 @@ fn install_cuda_inner(
     cuda_postinstallation_actions(&cuda_config).unwrap();
     println!("CUDA post-installation actions completed!");
 
-    Err(RebootRequired)
+    Ok(())
 }
 
 fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), RebootRequired> {
@@ -226,6 +226,7 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     let kernel_image_package = "linux-image-{version}";
     let kernel_version_format = format!("{{major}}.{{minor}}.{{patch}}-{{micro}}{}", kernel_suffix);
     let kernel_headers_package = "linux-headers-{version}";
+    let kernel_modules_extra_package = "linux-modules-extra-{version}";
 
     run("apt-get update").unwrap();
 
@@ -247,7 +248,6 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
 
     for line in packages.lines() {
         let package_name = line.split_whitespace().next().unwrap_or("");
-        println!("Package: {package_name}");
         if let Some((patch, micro)) = parse_kernel_package(package_name, &prefix, kernel_suffix) {
             if patch > max_patch || (patch == max_patch && micro > max_micro) {
                 max_patch = patch;
@@ -265,6 +265,8 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
 
     let wanted_kernel_package = kernel_image_package.replace("{version}", &wanted_kernel_version);
     let wanted_kernel_headers = kernel_headers_package.replace("{version}", &wanted_kernel_version);
+    let wanted_kernel_modules_extra = 
+        kernel_modules_extra_package.replace("{version}", &wanted_kernel_version);
 
     // Check if the wanted kernel is already installed
     let current_kernel = get_kernel_version().unwrap();
@@ -282,20 +284,28 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     .unwrap();
     let are_headers_installed = status.success();
 
+    let (status, _, _) = run_with_options(
+        &format!("dpkg -l | grep {}", wanted_kernel_modules_extra),
+        false,
+        None,
+        true,
+        0,
+    ).unwrap();
+    let are_modules_extra_installed = status.success();
+
     // If both kernel and headers are already installed, no need to reboot
-    if is_kernel_installed && are_headers_installed {
-        println!("Required kernel and headers are already installed.");
+    if is_kernel_installed && are_headers_installed && are_modules_extra_installed {
+        println!("Required kernel, headers, and exra modules are already installed.");
         return Ok(());
     }
 
     // Install the packages
     run(&format!(
-        "apt-get install -y make gcc {} {} software-properties-common pciutils gcc make dkms",
-        wanted_kernel_package, wanted_kernel_headers
+        "apt-get install -y {} {} {} build-essential dkms software-properties-common pciutils",
+        wanted_kernel_package, wanted_kernel_headers, wanted_kernel_modules_extra
     ))
     .unwrap();
 
-    // Reboot is needed only if we installed a new kernel
     if !is_kernel_installed {
         println!("New kernel installed. System needs to reboot.");
         Err(RebootRequired)
