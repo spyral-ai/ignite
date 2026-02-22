@@ -8,7 +8,7 @@ use std::{
 use clap::ValueEnum;
 use tempfile::TempDir;
 
-use crate::{utils::*, CloudProvider};
+use crate::{CloudProvider, utils::*};
 
 const PROFILE_FILENAME: &str = "/etc/profile.d/spyral_cuda_install.sh";
 const NVIDIA_PERSISTANCED_INSTALLER: &str =
@@ -49,7 +49,9 @@ impl CudaConfig {
         match version {
             CudaVersion::V12_5 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.5.0/local_installers/cuda_12.5.0_555.42.02_linux.run"),
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/12.5.0/local_installers/cuda_12.5.0_555.42.02_linux.run",
+                ),
                 toolkit_checksum: String::from("0bf587ce20c8e74b90701be56ae2c907"),
                 bin_folder: String::from("/usr/local/cuda-12.5/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.5/lib64"),
@@ -57,7 +59,9 @@ impl CudaConfig {
             },
             CudaVersion::V12_6 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.28.03_linux.run"),
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.28.03_linux.run",
+                ),
                 toolkit_checksum: String::from("8685a58497b0c7e5d964e6da7968bb1e"),
                 bin_folder: String::from("/usr/local/cuda-12.6/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.6/lib64"),
@@ -66,7 +70,9 @@ impl CudaConfig {
 
             CudaVersion::V12_8 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"),
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run",
+                ),
                 toolkit_checksum: String::from("c71027cf1a4ce84f80b9cbf81116e767"),
                 bin_folder: String::from("/usr/local/cuda-12.8/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.8/lib64"),
@@ -74,12 +80,14 @@ impl CudaConfig {
             },
             CudaVersion::V13_0_1 => Self {
                 version,
-                toolkit_url: String::from("https://developer.download.nvidia.com/compute/cuda/13.0.1/local_installers/cuda_13.0.1_580.82.07_linux.run"),
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/13.0.1/local_installers/cuda_13.0.1_580.82.07_linux.run",
+                ),
                 toolkit_checksum: String::from("8c56e3cb1ab74370aafed5a4600bc5bc"),
                 bin_folder: String::from("/usr/local/cuda-13.0.1/bin"),
                 lib_folder: String::from("/usr/local/cuda-13.0.1/lib64"),
-                driver_version: String::from("580.82.07")
-            }
+                driver_version: String::from("580.82.07"),
+            },
         }
     }
 }
@@ -222,7 +230,8 @@ fn install_cuda_inner(
 }
 
 fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), RebootRequired> {
-    let kernel_suffix = cloud_provider.kernel_suffix();
+    let distro_id = get_distro_id().unwrap();
+    let kernel_suffix = cloud_provider.kernel_suffix(distro_id);
     let kernel_image_package = "linux-image-{version}";
     let kernel_version_format = format!("{{major}}.{{minor}}.{{patch}}-{{micro}}{}", kernel_suffix);
     let kernel_headers_package = "linux-headers-{version}";
@@ -265,7 +274,7 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
 
     let wanted_kernel_package = kernel_image_package.replace("{version}", &wanted_kernel_version);
     let wanted_kernel_headers = kernel_headers_package.replace("{version}", &wanted_kernel_version);
-    let wanted_kernel_modules_extra = 
+    let wanted_kernel_modules_extra =
         kernel_modules_extra_package.replace("{version}", &wanted_kernel_version);
 
     // Check if the wanted kernel is already installed
@@ -290,7 +299,8 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
         None,
         true,
         0,
-    ).unwrap();
+    )
+    .unwrap();
     let are_modules_extra_installed = status.success();
 
     // If both kernel and headers are already installed, no need to reboot

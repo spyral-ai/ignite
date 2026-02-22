@@ -193,3 +193,16 @@ pub(crate) fn reboot() -> ! {
     run("reboot now").unwrap();
     std::process::exit(0);
 }
+
+pub(crate) fn get_distro_id() -> io::Result<String> {
+    let content = std::fs::read_to_string("/etc/os-release")?;
+    for line in content.lines() {
+        if let Some(id) = line.strip_prefix("ID=") {
+            return Ok(id.trim_matches('"').to_string());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "Could not determine distro from /etc/os-release",
+    ))
+}

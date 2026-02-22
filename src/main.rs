@@ -71,10 +71,13 @@ pub enum CloudProvider {
 }
 
 impl CloudProvider {
-    pub fn kernel_suffix(&self) -> &'static str {
+    pub fn kernel_suffix(&self, distro_id: &str) -> &'static str {
         match self {
             CloudProvider::Aws => "-aws",
-            CloudProvider::Gcp => "-cloud-amd64",
+            CloudProvider::Gcp => match distro_id {
+                "ubuntu" => "-gcp",
+                _ => "-cloud-amd64", // Debian and others
+            },
             CloudProvider::Azure => "-azure",
         }
     }
