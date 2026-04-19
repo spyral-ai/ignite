@@ -5,12 +5,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::ValueEnum;
+use clap::{Args, ValueEnum};
 use tempfile::TempDir;
 
 use crate::{utils::*, CloudProvider};
 
 const PROFILE_FILENAME: &str = "/etc/profile.d/spyral_cuda_install.sh";
+const NCCL_PROFILE_FILENAME: &str = "/etc/profile.d/spyral_nccl.sh";
+const DEFAULT_NCCL_INSTALL_DIR: &str = "/opt/nccl";
+const NCCL_VERSION: &str = "2.30.3-1";
+const NCCL_SOURCE_URL: &str = "https://github.com/NVIDIA/nccl/archive/refs/tags/v2.30.3-1.tar.gz";
 const NVIDIA_PERSISTANCED_INSTALLER: &str =
     "/usr/share/doc/NVIDIA_GLX-1.0/samples/nvidia-persistenced-init.tar.bz2";
 
@@ -33,6 +37,17 @@ impl std::fmt::Display for CudaVersion {
             CudaVersion::V13_0_1 => write!(f, "13.0.1"),
         }
     }
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct InstallNcclCommand {
+    /// Installation directory for NCCL
+    #[arg(long, default_value = DEFAULT_NCCL_INSTALL_DIR)]
+    pub(crate) install_dir: String,
+
+    /// Write /etc/profile.d/spyral_nccl.sh for system-wide NCCL environment variables
+    #[arg(long)]
+    pub(crate) write_profile: bool,
 }
 
 struct CudaConfig {
@@ -111,10 +126,12 @@ pub(crate) fn install_driver(
     println!("Installing GPU drivers for CUDA {}...", cuda_version);
 
     let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
-    run(&format!(
-        "sh {} --silent --driver",
-        installer_path.display()
-    ))?;
+    let installer = installer_path.to_string_lossy().into_owned();
+    run_cmd(
+        "sh",
+        [installer.as_str(), "--silent", "--driver"],
+        CommandOptions::default(),
+    )?;
 
     if verify_driver(true)? {
         lock_kernel_updates_debian()?;
@@ -138,11 +155,13 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
     let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
 
     println!("Extracting NVIDIA driver installer, to complete uninstallation...");
-    run(&format!(
-        "sh {} --extract={}",
-        installer_path.display(),
-        temp_dir.path().display()
-    ))?;
+    let installer = installer_path.to_string_lossy().into_owned();
+    let extract_arg = format!("--extract={}", temp_dir.path().display());
+    run_cmd(
+        "sh",
+        [installer.as_str(), extract_arg.as_str()],
+        CommandOptions::default(),
+    )?;
 
     let installer_path = temp_dir.path().join(format!(
         "NVIDIA-Linux-x86_64-{}.run",
@@ -150,7 +169,12 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
     ));
 
     println!("Starting uninstallation...");
-    run(&format!("sh {} -s --uninstall", installer_path.display()))?;
+    let installer = installer_path.to_string_lossy().into_owned();
+    run_cmd(
+        "sh",
+        [installer.as_str(), "-s", "--uninstall"],
+        CommandOptions::default(),
+    )?;
 
     println!("Uninstallation completed!");
     unlock_kernel_updates_debian()?;
@@ -159,20 +183,36 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
 }
 
 pub(crate) fn verify_driver(verbose: bool) -> io::Result<bool> {
-    let (status, _, _) = run_with_options("which nvidia-smi", false, None, true, 0)?;
+    let output = run_cmd(
+        "which",
+        ["nvidia-smi"],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
+    )?;
 
-    if !status.success() {
+    if !output.status.success() {
         if verbose {
             println!("Couldn't find nvidia-smi, the driver is not installed.");
         }
         return Ok(false);
     }
 
-    let (status, stdout, stderr) = run_with_options("nvidia-smi -L", false, None, true, 0)?;
-    let success = status.success() && stdout.contains("UUID");
+    let output = run_cmd(
+        "nvidia-smi",
+        ["-L"],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
+    )?;
+    let success = output.status.success() && output.stdout.contains("UUID");
 
     if verbose {
-        println!("nvidia-smi -L output: {} {}", stdout, stderr);
+        println!("nvidia-smi -L output: {} {}", output.stdout, output.stderr);
     }
 
     Ok(success)
@@ -188,6 +228,84 @@ pub(crate) fn install_cuda(
             reboot();
         }
     }
+}
+
+pub(crate) fn install_nccl(command: InstallNcclCommand) -> io::Result<()> {
+    if command.install_dir.trim().is_empty() {
+        return Err(io::Error::other("install_dir cannot be empty"));
+    }
+
+    println!(
+        "Installing NCCL {} to {}...",
+        NCCL_VERSION, command.install_dir
+    );
+
+    let cuda_home = detect_cuda_home()?;
+    run_cmd(
+        "apt-get",
+        ["install", "-y", "build-essential"],
+        CommandOptions::default(),
+    )?;
+
+    let temp_dir = TempDir::new()?;
+    let archive_path = temp_dir.path().join(format!("nccl-{NCCL_VERSION}.tar.gz"));
+    let source_dir = temp_dir.path().join("src");
+    let archive = archive_path.to_string_lossy().into_owned();
+    let source = source_dir.to_string_lossy().into_owned();
+
+    fs::create_dir_all(&source_dir)?;
+    run_cmd(
+        "curl",
+        ["-fsSL", "-o", archive.as_str(), NCCL_SOURCE_URL],
+        CommandOptions::default(),
+    )?;
+    run_cmd(
+        "tar",
+        [
+            "-xzf",
+            archive.as_str(),
+            "-C",
+            source.as_str(),
+            "--strip-components=1",
+        ],
+        CommandOptions::default(),
+    )?;
+
+    let current_dir = env::current_dir()?;
+    env::set_current_dir(&source_dir)?;
+    let build_result = (|| {
+        let jobs = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(1)
+            .to_string();
+        let cuda_home_arg = format!("CUDA_HOME={cuda_home}");
+        run_cmd(
+            "make",
+            ["-j", jobs.as_str(), "src.build", cuda_home_arg.as_str()],
+            CommandOptions::default(),
+        )
+    })();
+    env::set_current_dir(current_dir)?;
+    build_result?;
+
+    install_built_nccl(&source_dir.join("build"), &command.install_dir)?;
+    if command.write_profile {
+        configure_nccl_environment(&command.install_dir)?;
+    }
+    verify_nccl_installation(&command.install_dir)?;
+
+    println!(
+        "NCCL {} installed successfully to {}.",
+        NCCL_VERSION, command.install_dir
+    );
+    if command.write_profile {
+        println!("Wrote {}", NCCL_PROFILE_FILENAME);
+    }
+    println!("Add the following to ~/.bashrc if you want NCCL on your default shell path:");
+    for export in nccl_env_exports(&command.install_dir) {
+        println!("{export}");
+    }
+    Ok(())
 }
 
 fn install_cuda_inner(
@@ -215,10 +333,12 @@ fn install_cuda_inner(
     let installer_path = download_cuda_toolkit_installer(&cuda_config).unwrap();
 
     println!("Installing CUDA {} toolkit...", cuda_version);
-    run(&format!(
-        "sh {} --silent --toolkit",
-        installer_path.display()
-    ))
+    let installer = installer_path.to_string_lossy().into_owned();
+    run_cmd(
+        "sh",
+        [installer.as_str(), "--silent", "--toolkit"],
+        CommandOptions::default(),
+    )
     .unwrap();
     println!("CUDA toolkit installation completed!");
 
@@ -237,7 +357,7 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     let kernel_headers_package = "linux-headers-{version}";
     let kernel_modules_extra_package = "linux-modules-extra-{version}";
 
-    run("apt-get update").unwrap();
+    run_cmd("apt-get", ["update"], CommandOptions::default()).unwrap();
 
     let kernel_version = get_kernel_version().unwrap();
     let mut version_parts = kernel_version.split('.');
@@ -246,7 +366,13 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     println!("Major: {major}, minor: {minor}");
 
     // Get all available linux-image packages
-    let (_, packages, _) = run("apt-cache search linux-image").unwrap();
+    let packages = run_cmd(
+        "apt-cache",
+        ["search", "linux-image"],
+        CommandOptions::default(),
+    )
+    .unwrap()
+    .stdout;
 
     // Find the newest version matching our major.minor
     let prefix = format!("linux-image-{}.{}", major, minor);
@@ -283,25 +409,31 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
         current_kernel.contains(&format!("{}.{}.{}-{}", major, minor, max_patch, max_micro));
 
     // Check if the headers are already installed
-    let (status, _, _) = run_with_options(
-        &format!("dpkg -l | grep {}", wanted_kernel_headers),
-        false,
-        None,
-        true,
-        0,
+    let headers_status = run_cmd(
+        "dpkg",
+        ["-s", wanted_kernel_headers.as_str()],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
     )
-    .unwrap();
-    let are_headers_installed = status.success();
+    .unwrap()
+    .status;
+    let are_headers_installed = headers_status.success();
 
-    let (status, _, _) = run_with_options(
-        &format!("dpkg -l | grep {}", wanted_kernel_modules_extra),
-        false,
-        None,
-        true,
-        0,
+    let modules_status = run_cmd(
+        "dpkg",
+        ["-s", wanted_kernel_modules_extra.as_str()],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
     )
-    .unwrap();
-    let are_modules_extra_installed = status.success();
+    .unwrap()
+    .status;
+    let are_modules_extra_installed = modules_status.success();
 
     // If both kernel and headers are already installed, no need to reboot
     if is_kernel_installed && are_headers_installed && are_modules_extra_installed {
@@ -310,10 +442,21 @@ fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), Rebo
     }
 
     // Install the packages
-    run(&format!(
-        "apt-get install -y {} {} {} build-essential dkms software-properties-common pciutils",
-        wanted_kernel_package, wanted_kernel_headers, wanted_kernel_modules_extra
-    ))
+    run_cmd(
+        "apt-get",
+        [
+            "install",
+            "-y",
+            wanted_kernel_package.as_str(),
+            wanted_kernel_headers.as_str(),
+            wanted_kernel_modules_extra.as_str(),
+            "build-essential",
+            "dkms",
+            "software-properties-common",
+            "pciutils",
+        ],
+        CommandOptions::default(),
+    )
     .unwrap();
 
     if !is_kernel_installed {
@@ -351,12 +494,158 @@ fn configure_persistanced_service() -> io::Result<()> {
     let current_dir = env::current_dir()?;
     env::set_current_dir(temp_dir.path())?;
 
-    run_with_options("tar -xf installer.tar.bz2", true, None, true, 0)?;
+    run_cmd(
+        "tar",
+        ["-xf", "installer.tar.bz2"],
+        CommandOptions {
+            silent: true,
+            ..Default::default()
+        },
+    )?;
     println!("Executing nvidia-persistenced installer...");
-    run("sh nvidia-persistenced-init/install.sh")?;
+    run_cmd(
+        "sh",
+        ["nvidia-persistenced-init/install.sh"],
+        CommandOptions::default(),
+    )?;
 
     env::set_current_dir(current_dir)?;
     Ok(())
+}
+
+fn install_built_nccl(build_dir: &Path, install_dir: &str) -> io::Result<()> {
+    let include_dir = build_dir.join("include");
+    let lib_dir = build_dir.join("lib");
+
+    if !include_dir.exists() || !lib_dir.exists() {
+        return Err(io::Error::other(format!(
+            "NCCL build output was missing include/ or lib/ under {}",
+            build_dir.display()
+        )));
+    }
+
+    let install_dir_path = Path::new(install_dir);
+    if install_dir_path.exists() {
+        if install_dir_path.is_dir() {
+            fs::remove_dir_all(install_dir_path)?;
+        } else {
+            fs::remove_file(install_dir_path)?;
+        }
+    }
+
+    fs::create_dir_all(install_dir_path)?;
+
+    let include = include_dir.to_string_lossy().into_owned();
+    let lib = lib_dir.to_string_lossy().into_owned();
+    run_cmd(
+        "cp",
+        ["-a", include.as_str(), lib.as_str(), install_dir],
+        CommandOptions::default(),
+    )?;
+
+    fs::write(
+        install_dir_path.join("VERSION"),
+        format!("NCCL {NCCL_VERSION}\n"),
+    )?;
+
+    Ok(())
+}
+
+fn configure_nccl_environment(install_dir: &str) -> io::Result<()> {
+    let mut profile = File::create(NCCL_PROFILE_FILENAME)?;
+    writeln!(
+        profile,
+        "# Configuring NCCL. File created by Spyral CUDA installation manager."
+    )?;
+    for export in nccl_env_exports(install_dir) {
+        writeln!(profile, "{export}")?;
+    }
+
+    Ok(())
+}
+
+fn nccl_env_exports(install_dir: &str) -> [String; 4] {
+    [
+        format!("export NCCL_HOME={install_dir}"),
+        format!("export CPATH={install_dir}/include${{CPATH:+:${{CPATH}}}}"),
+        format!("export LIBRARY_PATH={install_dir}/lib${{LIBRARY_PATH:+:${{LIBRARY_PATH}}}}"),
+        format!(
+            "export LD_LIBRARY_PATH={install_dir}/lib${{LD_LIBRARY_PATH:+:${{LD_LIBRARY_PATH}}}}"
+        ),
+    ]
+}
+
+fn verify_nccl_installation(install_dir: &str) -> io::Result<()> {
+    let header_path = Path::new(install_dir).join("include/nccl.h");
+    let library_path = Path::new(install_dir).join("lib/libnccl.so");
+
+    if !header_path.exists() || !library_path.exists() {
+        return Err(io::Error::other(format!(
+            "NCCL installation verification failed. Expected {} and {} to exist.",
+            header_path.display(),
+            library_path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn detect_cuda_home() -> io::Result<String> {
+    let default_cuda = Path::new("/usr/local/cuda");
+    if default_cuda.exists() {
+        return Ok(default_cuda.display().to_string());
+    }
+
+    let output = run_cmd(
+        "which",
+        ["nvcc"],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
+    )?;
+    if output.status.success() {
+        let nvcc_path = PathBuf::from(output.stdout.trim());
+        if let Some(cuda_home) = nvcc_path.parent().and_then(Path::parent) {
+            return Ok(cuda_home.display().to_string());
+        }
+    }
+
+    if let Ok(content) = fs::read_to_string(PROFILE_FILENAME) {
+        for line in content.lines() {
+            if let Some(path_export) = line.strip_prefix("export PATH=") {
+                let path_prefix = path_export.split("${").next().unwrap_or("");
+                if let Some(cuda_bin) = path_prefix.strip_suffix("/bin") {
+                    let cuda_home = Path::new(cuda_bin);
+                    if cuda_home.exists() {
+                        return Ok(cuda_home.display().to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cuda_dirs: Vec<String> = fs::read_dir("/usr/local")?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            if !entry.path().is_dir() {
+                return None;
+            }
+
+            let name = entry.file_name().into_string().ok()?;
+            if name.starts_with("cuda-") {
+                Some(format!("/usr/local/{name}"))
+            } else {
+                None
+            }
+        })
+        .collect();
+    cuda_dirs.sort();
+
+    cuda_dirs
+        .pop()
+        .ok_or_else(|| io::Error::other("Could not locate a CUDA installation for building NCCL"))
 }
 
 fn cuda_postinstallation_actions(cuda_config: &CudaConfig) -> io::Result<()> {

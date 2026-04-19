@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use crate::utils::run;
+use crate::utils::{run_cmd, CommandOptions};
 
 pub fn install_rust(home_dir: String) -> io::Result<()> {
     if Path::new(&format!("{home_dir}/.cargo/bin")).exists() {
@@ -15,13 +15,27 @@ pub fn install_rust(home_dir: String) -> io::Result<()> {
     println!("Installing Rust...");
 
     // Install dependencies
-    run("apt-get update")?;
-    run("apt-get install -y curl build-essential")?;
+    run_cmd("apt-get", ["update"], CommandOptions::default())?;
+    run_cmd(
+        "apt-get",
+        ["install", "-y", "curl", "build-essential"],
+        CommandOptions::default(),
+    )?;
 
     // Download and run rustup installer
     println!("Downloading and running rustup installer...");
-    run("curl -tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/sh.rustup.rs")?;
-    run("sh /tmp/sh.rustup.rs -y")?;
+    run_cmd(
+        "curl",
+        [
+            "-tlsv1.2",
+            "-sSf",
+            "https://sh.rustup.rs",
+            "-o",
+            "/tmp/sh.rustup.rs",
+        ],
+        CommandOptions::default(),
+    )?;
+    run_cmd("sh", ["/tmp/sh.rustup.rs", "-y"], CommandOptions::default())?;
 
     // Get the home directory and sudo user
     let sudo_user = env::var("SUDO_USER").unwrap_or_else(|_| String::from(""));
@@ -38,29 +52,47 @@ pub fn install_rust(home_dir: String) -> io::Result<()> {
 
             writeln!(file, "\n# Add Rust's cargo to PATH")?;
             writeln!(file, "export PATH=\"$HOME/.cargo/bin:$PATH\"")?;
-
-            run(&format!("source {config_file}"))?;
         }
     }
 
     // Fix permissions if running as root for a regular user
     if !sudo_user.is_empty() {
         println!("Setting correct ownership for Rust installation...");
-        run(&format!(
-            "chown -R {sudo_user}:{sudo_user} {home_dir}/.cargo"
-        ))?;
+        let owner = format!("{sudo_user}:{sudo_user}");
+        let cargo_dir = format!("{home_dir}/.cargo");
+        run_cmd(
+            "chown",
+            ["-R", owner.as_str(), cargo_dir.as_str()],
+            CommandOptions::default(),
+        )?;
 
         // Also fix permissions for the shell config files
         if Path::new(&config_file).exists() {
-            run(&format!("chown {sudo_user}:{sudo_user} {config_file}"))?;
+            run_cmd(
+                "chown",
+                [owner.as_str(), config_file.as_str()],
+                CommandOptions::default(),
+            )?;
         }
     }
 
     let rustup_path = format!("{home_dir}/.cargo/bin/rustup");
     println!("Installing rust components, rustup path: {rustup_path} ...");
-    run(&format!("{rustup_path} toolchain install nightly"))?;
-    run(&format!("{rustup_path} default nightly"))?;
-    run(&format!("{rustup_path} component add rust-analyzer"))?;
+    run_cmd(
+        rustup_path.as_str(),
+        ["toolchain", "install", "nightly"],
+        CommandOptions::default(),
+    )?;
+    run_cmd(
+        rustup_path.as_str(),
+        ["default", "nightly"],
+        CommandOptions::default(),
+    )?;
+    run_cmd(
+        rustup_path.as_str(),
+        ["component", "add", "rust-analyzer"],
+        CommandOptions::default(),
+    )?;
 
     println!("Rust installation completed successfully!");
 

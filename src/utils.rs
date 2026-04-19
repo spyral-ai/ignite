@@ -1,54 +1,65 @@
 use std::{
+    ffi::{OsStr, OsString},
     io::{self, Write},
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
 };
 
-/// Runs the `command`, with no retries, and checks whether or not the command executed
-/// successfuly.
-///
-/// This returns the status of the command, and the content of stdout and stderr, respectively.
-///
-/// For more control, use [`run_with_options`].
-pub(crate) fn run(command: &str) -> io::Result<(ExitStatus, String, String)> {
-    run_with_options(command, true, None, false, 0)
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CommandOptions<'a> {
+    pub(crate) check: bool,
+    pub(crate) input: Option<&'a str>,
+    pub(crate) silent: bool,
+    pub(crate) retries: usize,
 }
 
-/// Runs the `command` with the provided options.
-///
-/// This returns the status of the command, and the content of stdout and stderr, respectively.
-///
-/// # Arguments
-///
-/// - `check` - Whether or not the output of the command is checked.
-/// - `input` - Input to the command.
-/// - `silent` - If the command output must be supressed.
-/// - `retries` - The number of times to retry the command.
-#[allow(unused_assignments)]
-pub(crate) fn run_with_options(
-    command: &str,
-    check: bool,
-    input: Option<&str>,
-    silent: bool,
-    retries: usize,
-) -> io::Result<(ExitStatus, String, String)> {
-    if !silent {
-        println!("Executing {}", command);
+impl Default for CommandOptions<'_> {
+    fn default() -> Self {
+        Self {
+            check: true,
+            input: None,
+            silent: false,
+            retries: 0,
+        }
+    }
+}
+
+pub(crate) struct CommandOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+pub(crate) fn run_cmd<I, S>(
+    program: &str,
+    args: I,
+    options: CommandOptions<'_>,
+) -> io::Result<CommandOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<OsString> = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect();
+
+    if !options.silent {
+        let rendered_command = std::iter::once(OsString::from(program))
+            .chain(args.iter().cloned())
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("Executing {}", rendered_command);
     }
 
-    let mut stdout_content = String::new();
-    let mut stderr_content = String::new();
     let mut try_count = 0;
 
     loop {
-        let mut parts = command.split_whitespace();
-        let program = parts.next().unwrap();
-        let args: Vec<&str> = parts.collect();
-
         let mut cmd = Command::new(program);
         cmd.args(&args);
 
-        if input.is_some() {
+        if options.input.is_some() {
             cmd.stdin(Stdio::piped());
         }
         cmd.stdout(Stdio::piped());
@@ -56,31 +67,34 @@ pub(crate) fn run_with_options(
 
         let mut child = cmd.spawn()?;
 
-        if let Some(input_str) = input {
+        if let Some(input_str) = options.input {
             if let Some(stdin) = child.stdin.as_mut() {
                 stdin.write_all(input_str.as_bytes())?;
             }
         }
 
         let output = child.wait_with_output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        stdout_content = String::from_utf8_lossy(&output.stdout).to_string();
-        stderr_content = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if !silent {
-            if !stdout_content.is_empty() {
-                println!("{}", stdout_content);
+        if !options.silent {
+            if !stdout.is_empty() {
+                println!("{}", stdout);
             }
-            if !stderr_content.is_empty() {
-                eprintln!("{}", stderr_content);
+            if !stderr.is_empty() {
+                eprintln!("{}", stderr);
             }
         }
 
-        if output.status.success() || try_count >= retries {
-            if check && !output.status.success() {
+        if output.status.success() || try_count >= options.retries {
+            if options.check && !output.status.success() {
                 return Err(io::Error::other("Command exited with nonzero code"));
             }
-            return Ok((output.status, stdout_content, stderr_content));
+            return Ok(CommandOutput {
+                status: output.status,
+                stdout,
+                stderr,
+            });
         }
 
         try_count += 1;
@@ -98,17 +112,21 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
     }
 
     println!("Downloading {url} to {dest_path} ...");
-    run_with_options(
-        &format!("curl -fsSL -o {dest_path} {url}"),
-        true,
-        None,
-        false,
-        0,
+    run_cmd(
+        "curl",
+        ["-fsSL", "-o", &dest_path, url],
+        CommandOptions::default(),
     )?;
 
-    let (_status, stdout, _) =
-        run_with_options(&format!("md5sum {dest_path}"), true, None, true, 0)?;
-    let checksum = stdout.split_whitespace().next().unwrap_or("");
+    let output = run_cmd(
+        "md5sum",
+        [&dest_path],
+        CommandOptions {
+            silent: true,
+            ..Default::default()
+        },
+    )?;
+    let checksum = output.stdout.split_whitespace().next().unwrap_or("");
 
     if checksum != md5sum {
         return Err(io::Error::other(format!(
@@ -121,8 +139,8 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
 }
 
 pub(crate) fn get_kernel_version() -> io::Result<String> {
-    let (_, stdout, _) = run("uname -r")?;
-    Ok(stdout.trim().to_string())
+    let output = run_cmd("uname", ["-r"], CommandOptions::default())?;
+    Ok(output.stdout.trim().to_string())
 }
 
 // Parse a package name like "linux-image-5.15.0-1015-aws" to extract version components
@@ -162,9 +180,13 @@ pub(crate) fn lock_kernel_updates_debian() -> io::Result<()> {
     println!("Locking kernel updates ...");
 
     let kernel_version = get_kernel_version()?;
-    run(&format!(
-        "apt-mark hold linux-image-{kernel_version} linux-headers-{kernel_version}",
-    ))?;
+    let image_package = format!("linux-image-{kernel_version}");
+    let headers_package = format!("linux-headers-{kernel_version}");
+    run_cmd(
+        "apt-mark",
+        ["hold", image_package.as_str(), headers_package.as_str()],
+        CommandOptions::default(),
+    )?;
 
     Ok(())
 }
@@ -173,9 +195,13 @@ pub(crate) fn unlock_kernel_updates_debian() -> io::Result<()> {
     println!("Unlocking kernel updates...");
 
     let kernel_version = get_kernel_version()?;
-    run(&format!(
-        "apt-mark unhold linux-image-{kernel_version} linux-headers-{kernel_version}",
-    ))?;
+    let image_package = format!("linux-image-{kernel_version}");
+    let headers_package = format!("linux-headers-{kernel_version}");
+    run_cmd(
+        "apt-mark",
+        ["unhold", image_package.as_str(), headers_package.as_str()],
+        CommandOptions::default(),
+    )?;
 
     Ok(())
 }
@@ -184,7 +210,7 @@ pub(crate) fn reboot() -> ! {
     println!("The system needs to be rebooted to complete the installation process.");
     println!("The process will be continued after the reboot.");
 
-    run("reboot now").unwrap();
+    run_cmd("reboot", ["now"], CommandOptions::default()).unwrap();
     std::process::exit(0);
 }
 
