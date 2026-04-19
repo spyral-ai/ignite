@@ -2,7 +2,6 @@ use std::io;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-pub(crate) mod install_clang;
 pub(crate) mod install_cuda;
 pub(crate) mod install_nvim;
 pub(crate) mod install_rust;
@@ -39,14 +38,10 @@ fn main() -> io::Result<()> {
                 }
             }
         },
-        AppCommand::Clang { version } => install_clang::install_clang(version.as_usize())?,
         AppCommand::Nvim => install_nvim::install_nvim(home_dir)?,
         AppCommand::Rust => install_rust::install_rust(home_dir)?,
         AppCommand::Mount(cmd) => mount::configure_mount(cmd)?,
-        AppCommand::InstallAll {
-            cuda_version,
-            clang_version,
-        } => {
+        AppCommand::InstallAll { cuda_version } => {
             println!("Installing all components...");
 
             // Install Rust first
@@ -54,10 +49,6 @@ fn main() -> io::Result<()> {
 
             // This will install the driver first.
             install_cuda::install_cuda(args.cloud_provider, cuda_version)?;
-
-            // Install Clang and Neovim
-            install_clang::install_clang(clang_version.as_usize())?;
-            //install_nvim::install_nvim(home_dir)?;
 
             println!("All components installed successfully!");
         }
@@ -86,25 +77,6 @@ impl CloudProvider {
     }
 }
 
-/// Clang versions that are supported. We use an enum here so that the user doesn't specify an
-/// arbitrary number,
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum ClangVersion {
-    V15,
-    V16,
-    V17,
-}
-
-impl ClangVersion {
-    pub fn as_usize(&self) -> usize {
-        match self {
-            ClangVersion::V15 => 15,
-            ClangVersion::V16 => 16,
-            ClangVersion::V17 => 17,
-        }
-    }
-}
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -128,13 +100,6 @@ enum AppCommand {
     #[command(subcommand)]
     Cuda(CudaCommand),
 
-    /// Install Clang
-    Clang {
-        /// Clang version to install
-        #[arg(short, long, value_enum, default_value = "v17")]
-        version: ClangVersion,
-    },
-
     /// Install Neovim
     Nvim,
 
@@ -144,15 +109,11 @@ enum AppCommand {
     /// Persistently mount a block device at a mountpoint
     Mount(mount::MountCommand),
 
-    /// Install all components (Rust, CUDA, Clang, Neovim)
+    /// Install all components (Rust and CUDA)
     InstallAll {
         /// CUDA version to install
         #[arg(short, long, value_enum, default_value = "v13-0-1")]
         cuda_version: CudaVersion,
-
-        /// Clang version to install
-        #[arg(long, value_enum, default_value = "v17")]
-        clang_version: ClangVersion,
     },
 }
 
