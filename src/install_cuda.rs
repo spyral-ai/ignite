@@ -8,7 +8,7 @@ use std::{
 use clap::ValueEnum;
 use tempfile::TempDir;
 
-use crate::{CloudProvider, utils::*};
+use crate::{utils::*, CloudProvider};
 
 const PROFILE_FILENAME: &str = "/etc/profile.d/spyral_cuda_install.sh";
 const NVIDIA_PERSISTANCED_INSTALLER: &str =
@@ -231,7 +231,7 @@ fn install_cuda_inner(
 
 fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), RebootRequired> {
     let distro_id = get_distro_id().unwrap();
-    let kernel_suffix = cloud_provider.kernel_suffix(distro_id);
+    let kernel_suffix = cloud_provider.kernel_suffix(&distro_id);
     let kernel_image_package = "linux-image-{version}";
     let kernel_version_format = format!("{{major}}.{{minor}}.{{patch}}-{{micro}}{}", kernel_suffix);
     let kernel_headers_package = "linux-headers-{version}";
