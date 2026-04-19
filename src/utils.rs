@@ -78,10 +78,7 @@ pub(crate) fn run_with_options(
 
         if output.status.success() || try_count >= retries {
             if check && !output.status.success() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Command exited with nonzero code",
-                ));
+                return Err(io::Error::other("Command exited with nonzero code"));
             }
             return Ok((output.status, stdout_content, stderr_content));
         }
@@ -114,13 +111,10 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
     let checksum = stdout.split_whitespace().next().unwrap_or("");
 
     if checksum != md5sum {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "The installer file checksum does not match. Won't continue installation. \
+        return Err(io::Error::other(format!(
+            "The installer file checksum does not match. Won't continue installation. \
                 Try deleting {dest_path} and trying again.",
-            ),
-        ));
+        )));
     }
 
     Ok(dest_path.into())
@@ -201,8 +195,7 @@ pub(crate) fn get_distro_id() -> io::Result<String> {
             return Ok(id.trim_matches('"').to_string());
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::Other,
+    Err(io::Error::other(
         "Could not determine distro from /etc/os-release",
     ))
 }
