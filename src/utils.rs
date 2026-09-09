@@ -107,8 +107,13 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
 
     let file_path = Path::new(&dest_path);
     if file_path.exists() {
-        println!("File {dest_path} already exists, skipping download.");
-        return Ok(dest_path.into());
+        if file_has_md5(file_path, md5sum)? {
+            println!("File {dest_path} already exists and its checksum matches.");
+            return Ok(dest_path.into());
+        }
+
+        println!("File {dest_path} has the wrong checksum; downloading it again.");
+        std::fs::remove_file(file_path)?;
     }
 
     println!("Downloading {url} to {dest_path} ...");
@@ -118,110 +123,24 @@ pub(crate) fn download_file(url: &str, md5sum: &str) -> io::Result<PathBuf> {
         CommandOptions::default(),
     )?;
 
-    let output = run_cmd(
-        "md5sum",
-        [&dest_path],
-        CommandOptions {
-            silent: true,
-            ..Default::default()
-        },
-    )?;
-    let checksum = output.stdout.split_whitespace().next().unwrap_or("");
-
-    if checksum != md5sum {
+    if !file_has_md5(file_path, md5sum)? {
         return Err(io::Error::other(format!(
-            "The installer file checksum does not match. Won't continue installation. \
-                Try deleting {dest_path} and trying again.",
+            "The installer file checksum does not match. Delete {dest_path} and try again."
         )));
     }
 
     Ok(dest_path.into())
 }
 
-pub(crate) fn get_kernel_version() -> io::Result<String> {
-    let output = run_cmd("uname", ["-r"], CommandOptions::default())?;
-    Ok(output.stdout.trim().to_string())
-}
-
-// Parse a package name like "linux-image-5.15.0-1015-aws" to extract version components
-pub(crate) fn parse_kernel_package(
-    package: &str,
-    prefix: &str,
-    suffix: &str,
-) -> Option<(usize, usize)> {
-    if !package.starts_with(prefix) || !package.contains(suffix) {
-        return None;
-    }
-
-    // Extract the patch and micro (e.g., ".0-1015" from "linux-image-5.15.0-1015-aws")
-    let version_part = package
-        .strip_prefix(prefix)
-        .and_then(|s| s.strip_suffix(suffix))
-        .or_else(|| {
-            package.strip_prefix(prefix).and_then(|s| {
-                let end_idx = s.find(suffix)?;
-                Some(&s[..end_idx])
-            })
-        })?;
-
-    // Split by "-" to .patch and micro
-    let parts: Vec<&str> = version_part.split('-').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let patch = parts[0].strip_prefix(".").unwrap().parse::<usize>().ok()?;
-    let micro = parts[1].parse::<usize>().ok()?;
-
-    Some((patch, micro))
-}
-
-pub(crate) fn lock_kernel_updates_debian() -> io::Result<()> {
-    println!("Locking kernel updates ...");
-
-    let kernel_version = get_kernel_version()?;
-    let image_package = format!("linux-image-{kernel_version}");
-    let headers_package = format!("linux-headers-{kernel_version}");
-    run_cmd(
-        "apt-mark",
-        ["hold", image_package.as_str(), headers_package.as_str()],
-        CommandOptions::default(),
+fn file_has_md5(path: &Path, expected: &str) -> io::Result<bool> {
+    let output = run_cmd(
+        "md5sum",
+        [path],
+        CommandOptions {
+            silent: true,
+            ..Default::default()
+        },
     )?;
-
-    Ok(())
-}
-
-pub(crate) fn unlock_kernel_updates_debian() -> io::Result<()> {
-    println!("Unlocking kernel updates...");
-
-    let kernel_version = get_kernel_version()?;
-    let image_package = format!("linux-image-{kernel_version}");
-    let headers_package = format!("linux-headers-{kernel_version}");
-    run_cmd(
-        "apt-mark",
-        ["unhold", image_package.as_str(), headers_package.as_str()],
-        CommandOptions::default(),
-    )?;
-
-    Ok(())
-}
-
-pub(crate) fn reboot() -> ! {
-    println!("The system needs to be rebooted to complete the installation process.");
-    println!("The process will be continued after the reboot.");
-
-    run_cmd("reboot", ["now"], CommandOptions::default()).unwrap();
-    std::process::exit(0);
-}
-
-pub(crate) fn get_distro_id() -> io::Result<String> {
-    let content = std::fs::read_to_string("/etc/os-release")?;
-    for line in content.lines() {
-        if let Some(id) = line.strip_prefix("ID=") {
-            return Ok(id.trim_matches('"').to_string());
-        }
-    }
-    Err(io::Error::other(
-        "Could not determine distro from /etc/os-release",
-    ))
+    let checksum = output.stdout.split_whitespace().next().unwrap_or("");
+    Ok(checksum == expected)
 }
