@@ -31,7 +31,9 @@ fn main() -> io::Result<()> {
                 install_cuda::install_cuda(args.cloud_provider, version)?
             }
             CudaCommand::InstallNccl(cmd) => install_cuda::install_nccl(cmd)?,
-            CudaCommand::UninstallDriver { version } => install_cuda::uninstall_driver(version)?,
+            CudaCommand::UninstallDriver { version } => {
+                install_cuda::uninstall_driver(args.cloud_provider, version)?
+            }
             CudaCommand::VerifyDriver => {
                 if install_cuda::verify_driver(true)? {
                     std::process::exit(0);
@@ -105,7 +107,7 @@ enum AppCommand {
     /// Install all components (Rust and CUDA)
     InstallAll {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v13-0-1")]
+        #[arg(short, long, value_enum, default_value_t = CudaVersion::default())]
         cuda_version: CudaVersion,
     },
 }
@@ -115,14 +117,14 @@ enum CudaCommand {
     /// Install NVIDIA GPU driver
     InstallDriver {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v13-0-1")]
+        #[arg(short, long, value_enum, default_value_t = CudaVersion::default())]
         version: CudaVersion,
     },
 
     /// Install CUDA toolkit
     InstallCuda {
         /// CUDA version to install
-        #[arg(short, long, value_enum, default_value = "v13-0-1")]
+        #[arg(short, long, value_enum, default_value_t = CudaVersion::default())]
         version: CudaVersion,
     },
 
@@ -132,7 +134,7 @@ enum CudaCommand {
     /// Uninstall NVIDIA GPU driver
     UninstallDriver {
         /// CUDA version to uninstall
-        #[arg(short, long, value_enum, default_value = "v13-0-1")]
+        #[arg(short, long, value_enum, default_value_t = CudaVersion::default())]
         version: CudaVersion,
     },
 

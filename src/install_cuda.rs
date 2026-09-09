@@ -8,7 +8,14 @@ use std::{
 use clap::{Args, ValueEnum};
 use tempfile::TempDir;
 
-use crate::{utils::*, CloudProvider};
+use crate::{
+    linux::{
+        clear_resume_service, configure_resume_service, distro_id, distro_version,
+        install_pinned_kernel, reboot, remove_kernel_pin, KernelConfig,
+    },
+    utils::*,
+    CloudProvider,
+};
 
 const PROFILE_FILENAME: &str = "/etc/profile.d/spyral_cuda_install.sh";
 const NCCL_PROFILE_FILENAME: &str = "/etc/profile.d/spyral_nccl.sh";
@@ -18,14 +25,16 @@ const NCCL_SOURCE_URL: &str = "https://github.com/NVIDIA/nccl/archive/refs/tags/
 const NVIDIA_PERSISTANCED_INSTALLER: &str =
     "/usr/share/doc/NVIDIA_GLX-1.0/samples/nvidia-persistenced-init.tar.bz2";
 
-struct RebootRequired;
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum CudaVersion {
     V12_5,
     V12_6,
     V12_8,
     V13_0_1,
+    V13_1_1,
+    V13_2_1,
+    #[default]
+    V13_3_1,
 }
 
 impl std::fmt::Display for CudaVersion {
@@ -35,6 +44,38 @@ impl std::fmt::Display for CudaVersion {
             CudaVersion::V12_6 => write!(f, "12.6"),
             CudaVersion::V12_8 => write!(f, "12.8"),
             CudaVersion::V13_0_1 => write!(f, "13.0.1"),
+            CudaVersion::V13_1_1 => write!(f, "13.1.1"),
+            CudaVersion::V13_2_1 => write!(f, "13.2.1"),
+            CudaVersion::V13_3_1 => write!(f, "13.3.1"),
+        }
+    }
+}
+
+impl CudaVersion {
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::V12_5 => "v12-5",
+            Self::V12_6 => "v12-6",
+            Self::V12_8 => "v12-8",
+            Self::V13_0_1 => "v13-0-1",
+            Self::V13_1_1 => "v13-1-1",
+            Self::V13_2_1 => "v13-2-1",
+            Self::V13_3_1 => "v13-3-1",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ResumeCommand {
+    InstallDriver,
+    InstallCuda,
+}
+
+impl ResumeCommand {
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::InstallDriver => "install-driver",
+            Self::InstallCuda => "install-cuda",
         }
     }
 }
@@ -48,6 +89,115 @@ pub(crate) struct InstallNcclCommand {
     /// Write /etc/profile.d/spyral_nccl.sh for system-wide NCCL environment variables
     #[arg(long)]
     pub(crate) write_profile: bool,
+}
+
+#[derive(Clone, Copy)]
+enum KernelLine {
+    V6_8,
+    V6_17,
+    V7_0,
+}
+
+impl KernelConfig {
+    fn for_host(cloud_provider: CloudProvider, cuda_version: CudaVersion) -> io::Result<Self> {
+        let distro_id = distro_id()?;
+        let distro_version = distro_version()?;
+        Self::for_platform(&distro_id, &distro_version, cloud_provider, cuda_version)
+    }
+
+    fn for_platform(
+        distro_id: &str,
+        distro_version: &str,
+        cloud_provider: CloudProvider,
+        cuda_version: CudaVersion,
+    ) -> io::Result<Self> {
+        if distro_id != "ubuntu" || distro_version != "24.04" {
+            return Err(io::Error::other(format!(
+                "Ignite has no pinned CUDA kernel for {distro_id} {distro_version} on \
+                 {cloud_provider:?}. Pinned CUDA installs currently require Ubuntu 24.04."
+            )));
+        }
+
+        let kernel_line = match cuda_version {
+            CudaVersion::V12_5 | CudaVersion::V12_6 | CudaVersion::V12_8 => KernelLine::V6_8,
+            CudaVersion::V13_0_1 | CudaVersion::V13_1_1 | CudaVersion::V13_2_1 => KernelLine::V6_17,
+            CudaVersion::V13_3_1 => KernelLine::V7_0,
+        };
+        let (version, image_version, headers_version, modules_version, flavor) =
+            match (cloud_provider, kernel_line) {
+                (CloudProvider::Gcp, KernelLine::V6_8) => (
+                    "6.8.0-1007-gcp",
+                    "6.8.0-1007.7",
+                    "6.8.0-1007.7",
+                    "6.8.0-1007.7",
+                    "gcp",
+                ),
+                (CloudProvider::Gcp, KernelLine::V6_17) => (
+                    "6.17.0-1022-gcp",
+                    "6.17.0-1022.25",
+                    "6.17.0-1022.25",
+                    "6.17.0-1022.25",
+                    "gcp",
+                ),
+                (CloudProvider::Gcp, KernelLine::V7_0) => (
+                    "7.0.0-1011-gcp",
+                    "7.0.0-1011.11~24.04.1",
+                    "7.0.0-1011.11~24.04.1",
+                    "7.0.0-1011.11~24.04.1",
+                    "gcp",
+                ),
+                (CloudProvider::Aws, KernelLine::V6_8) => (
+                    "6.8.0-1008-aws",
+                    "6.8.0-1008.8",
+                    "6.8.0-1008.8",
+                    "6.8.0-1008.8",
+                    "aws",
+                ),
+                (CloudProvider::Aws, KernelLine::V6_17) => (
+                    "6.17.0-1020-aws",
+                    "6.17.0-1020.20~24.04.1+1",
+                    "6.17.0-1020.20~24.04.1",
+                    "6.17.0-1020.20~24.04.1",
+                    "aws",
+                ),
+                (CloudProvider::Aws, KernelLine::V7_0) => (
+                    "7.0.0-1012-aws",
+                    "7.0.0-1012.12~24.04.1",
+                    "7.0.0-1012.12~24.04.1",
+                    "7.0.0-1012.12~24.04.1",
+                    "aws",
+                ),
+                (CloudProvider::Azure, KernelLine::V6_8) => (
+                    "6.8.0-1007-azure",
+                    "6.8.0-1007.7",
+                    "6.8.0-1007.7",
+                    "6.8.0-1007.7",
+                    "azure",
+                ),
+                (CloudProvider::Azure, KernelLine::V6_17) => (
+                    "6.17.0-1022-azure",
+                    "6.17.0-1022.22",
+                    "6.17.0-1022.22",
+                    "6.17.0-1022.22",
+                    "azure",
+                ),
+                (CloudProvider::Azure, KernelLine::V7_0) => (
+                    "7.0.0-1008-azure",
+                    "7.0.0-1008.8~24.04.2",
+                    "7.0.0-1008.8~24.04.2",
+                    "7.0.0-1008.8~24.04.2",
+                    "azure",
+                ),
+            };
+
+        Ok(Self::new(
+            version,
+            flavor,
+            image_version,
+            headers_version,
+            modules_version,
+        ))
+    }
 }
 
 struct CudaConfig {
@@ -91,7 +241,7 @@ impl CudaConfig {
                 toolkit_checksum: String::from("c71027cf1a4ce84f80b9cbf81116e767"),
                 bin_folder: String::from("/usr/local/cuda-12.8/bin"),
                 lib_folder: String::from("/usr/local/cuda-12.8/lib64"),
-                driver_version: String::from("550.54.14"),
+                driver_version: String::from("570.86.10"),
             },
             CudaVersion::V13_0_1 => Self {
                 version,
@@ -99,9 +249,39 @@ impl CudaConfig {
                     "https://developer.download.nvidia.com/compute/cuda/13.0.1/local_installers/cuda_13.0.1_580.82.07_linux.run",
                 ),
                 toolkit_checksum: String::from("8c56e3cb1ab74370aafed5a4600bc5bc"),
-                bin_folder: String::from("/usr/local/cuda-13.0.1/bin"),
-                lib_folder: String::from("/usr/local/cuda-13.0.1/lib64"),
+                bin_folder: String::from("/usr/local/cuda-13.0/bin"),
+                lib_folder: String::from("/usr/local/cuda-13.0/lib64"),
                 driver_version: String::from("580.82.07"),
+            },
+            CudaVersion::V13_1_1 => Self {
+                version,
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/13.1.1/local_installers/cuda_13.1.1_590.48.01_linux.run",
+                ),
+                toolkit_checksum: String::from("8aa93a77cffa8d055db0ceb9d0e2d692"),
+                bin_folder: String::from("/usr/local/cuda-13.1/bin"),
+                lib_folder: String::from("/usr/local/cuda-13.1/lib64"),
+                driver_version: String::from("590.48.01"),
+            },
+            CudaVersion::V13_2_1 => Self {
+                version,
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/13.2.1/local_installers/cuda_13.2.1_595.58.03_linux.run",
+                ),
+                toolkit_checksum: String::from("e5b4bdf19cc27d63a8254cb486764626"),
+                bin_folder: String::from("/usr/local/cuda-13.2/bin"),
+                lib_folder: String::from("/usr/local/cuda-13.2/lib64"),
+                driver_version: String::from("595.58.03"),
+            },
+            CudaVersion::V13_3_1 => Self {
+                version,
+                toolkit_url: String::from(
+                    "https://developer.download.nvidia.com/compute/cuda/13.3.1/local_installers/cuda_13.3.1_610.43.02_linux.run",
+                ),
+                toolkit_checksum: String::from("7c8d3eca60ee10d2c290bdc045f88f09"),
+                bin_folder: String::from("/usr/local/cuda-13.3/bin"),
+                lib_folder: String::from("/usr/local/cuda-13.3/lib64"),
+                driver_version: String::from("610.43.02"),
             },
         }
     }
@@ -111,21 +291,65 @@ pub(crate) fn install_driver(
     cloud_provider: CloudProvider,
     cuda_version: CudaVersion,
 ) -> io::Result<()> {
-    let cuda_config = CudaConfig::new(cuda_version);
+    install_driver_inner(cloud_provider, cuda_version, ResumeCommand::InstallDriver)?;
+    clear_resume_service()?;
+    Ok(())
+}
 
-    match install_dependencies_debian(cloud_provider) {
-        Ok(_) => {
-            println!("Dependencies installed successfully without requiring a reboot.");
-        }
-        Err(RebootRequired) => {
-            println!("System will reboot to apply kernel changes.");
-            reboot();
-        }
+fn install_driver_inner(
+    cloud_provider: CloudProvider,
+    cuda_version: CudaVersion,
+    resume_command: ResumeCommand,
+) -> io::Result<()> {
+    let cuda_config = CudaConfig::new(cuda_version);
+    let kernel_config = KernelConfig::for_host(cloud_provider, cuda_version)?;
+    let driver_is_ready = installed_driver_version()?.as_deref()
+        == Some(cuda_config.driver_version.as_str())
+        && verify_driver(false)?;
+
+    if !driver_is_ready && Path::new("/usr/bin/nvidia-uninstall").exists() {
+        println!("Removing the existing NVIDIA driver before configuring kernel packages...");
+        run_cmd(
+            "/usr/bin/nvidia-uninstall",
+            ["--silent"],
+            CommandOptions::default(),
+        )?;
+    }
+
+    if install_pinned_kernel(&kernel_config)? {
+        let cloud_provider = match cloud_provider {
+            CloudProvider::Aws => "aws",
+            CloudProvider::Gcp => "gcp",
+            CloudProvider::Azure => "azure",
+        };
+        configure_resume_service(&[
+            "--cloud-provider",
+            cloud_provider,
+            "cuda",
+            resume_command.cli_value(),
+            "--version",
+            cuda_version.cli_value(),
+        ])?;
+        println!(
+            "Rebooting into the pinned kernel {}. Ignite will continue the installation \
+             automatically after the machine starts.",
+            kernel_config.version
+        );
+        reboot();
+    }
+
+    if driver_is_ready {
+        println!(
+            "NVIDIA driver {} is already installed for kernel {}.",
+            cuda_config.driver_version, kernel_config.version
+        );
+        return Ok(());
     }
 
     println!("Installing GPU drivers for CUDA {}...", cuda_version);
 
     let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
+
     let installer = installer_path.to_string_lossy().into_owned();
     run_cmd(
         "sh",
@@ -133,17 +357,22 @@ pub(crate) fn install_driver(
         CommandOptions::default(),
     )?;
 
-    if verify_driver(true)? {
-        lock_kernel_updates_debian()?;
-        println!("GPU driver installed successfully!");
-    } else {
-        println!("Something went wrong with driver installation, installation failed");
+    if !verify_driver(true)? {
+        return Err(io::Error::other(format!(
+            "NVIDIA driver {} was installed but did not initialize on kernel {}",
+            cuda_config.driver_version, kernel_config.version
+        )));
     }
+
+    println!("GPU driver installed successfully!");
 
     Ok(())
 }
 
-pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
+pub(crate) fn uninstall_driver(
+    cloud_provider: CloudProvider,
+    cuda_version: CudaVersion,
+) -> io::Result<()> {
     let cuda_config = CudaConfig::new(cuda_version);
 
     if !verify_driver(false)? {
@@ -177,7 +406,7 @@ pub(crate) fn uninstall_driver(cuda_version: CudaVersion) -> io::Result<()> {
     )?;
 
     println!("Uninstallation completed!");
-    unlock_kernel_updates_debian()?;
+    remove_kernel_pin(&KernelConfig::for_host(cloud_provider, cuda_version)?)?;
 
     Ok(())
 }
@@ -218,16 +447,35 @@ pub(crate) fn verify_driver(verbose: bool) -> io::Result<bool> {
     Ok(success)
 }
 
+fn installed_driver_version() -> io::Result<Option<String>> {
+    let output = run_cmd(
+        "nvidia-smi",
+        ["--query-gpu=driver_version", "--format=csv,noheader"],
+        CommandOptions {
+            check: false,
+            silent: true,
+            ..Default::default()
+        },
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    Ok(output
+        .stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string))
+}
+
 pub(crate) fn install_cuda(
     cloud_provider: CloudProvider,
     cuda_version: CudaVersion,
 ) -> io::Result<()> {
-    match install_cuda_inner(cloud_provider, cuda_version) {
-        Ok(_) => Ok(()),
-        Err(RebootRequired) => {
-            reboot();
-        }
-    }
+    install_cuda_inner(cloud_provider, cuda_version)?;
+    clear_resume_service()?;
+    Ok(())
 }
 
 pub(crate) fn install_nccl(command: InstallNcclCommand) -> io::Result<()> {
@@ -273,7 +521,7 @@ pub(crate) fn install_nccl(command: InstallNcclCommand) -> io::Result<()> {
 
     let current_dir = env::current_dir()?;
     env::set_current_dir(&source_dir)?;
-    let build_result = (|| {
+    let build_result = {
         let jobs = std::thread::available_parallelism()
             .map(|parallelism| parallelism.get())
             .unwrap_or(1)
@@ -284,7 +532,7 @@ pub(crate) fn install_nccl(command: InstallNcclCommand) -> io::Result<()> {
             ["-j", jobs.as_str(), "src.build", cuda_home_arg.as_str()],
             CommandOptions::default(),
         )
-    })();
+    };
     env::set_current_dir(current_dir)?;
     build_result?;
 
@@ -308,19 +556,10 @@ pub(crate) fn install_nccl(command: InstallNcclCommand) -> io::Result<()> {
     Ok(())
 }
 
-fn install_cuda_inner(
-    cloud_provider: CloudProvider,
-    cuda_version: CudaVersion,
-) -> Result<(), RebootRequired> {
+fn install_cuda_inner(cloud_provider: CloudProvider, cuda_version: CudaVersion) -> io::Result<()> {
     let cuda_config = CudaConfig::new(cuda_version);
 
-    if !verify_driver(false).unwrap_or(false) {
-        println!(
-            "CUDA installation requires GPU driver to be installed first. \
-            Attempting to install GPU driver now."
-        );
-        install_driver(cloud_provider, cuda_version).unwrap();
-    }
+    install_driver_inner(cloud_provider, cuda_version, ResumeCommand::InstallCuda)?;
 
     if Path::new(&format!("{}/nvcc", cuda_config.bin_folder)).exists() {
         println!(
@@ -330,7 +569,7 @@ fn install_cuda_inner(
         return Ok(());
     }
 
-    let installer_path = download_cuda_toolkit_installer(&cuda_config).unwrap();
+    let installer_path = download_cuda_toolkit_installer(&cuda_config)?;
 
     println!("Installing CUDA {} toolkit...", cuda_version);
     let installer = installer_path.to_string_lossy().into_owned();
@@ -338,134 +577,14 @@ fn install_cuda_inner(
         "sh",
         [installer.as_str(), "--silent", "--toolkit"],
         CommandOptions::default(),
-    )
-    .unwrap();
+    )?;
     println!("CUDA toolkit installation completed!");
 
     println!("Executing post-installation actions...");
-    cuda_postinstallation_actions(&cuda_config).unwrap();
+    cuda_postinstallation_actions(&cuda_config)?;
     println!("CUDA post-installation actions completed!");
 
     Ok(())
-}
-
-fn install_dependencies_debian(cloud_provider: CloudProvider) -> Result<(), RebootRequired> {
-    let distro_id = get_distro_id().unwrap();
-    let kernel_suffix = cloud_provider.kernel_suffix(&distro_id);
-    let kernel_image_package = "linux-image-{version}";
-    let kernel_version_format = format!("{{major}}.{{minor}}.{{patch}}-{{micro}}{}", kernel_suffix);
-    let kernel_headers_package = "linux-headers-{version}";
-    let kernel_modules_extra_package = "linux-modules-extra-{version}";
-
-    run_cmd("apt-get", ["update"], CommandOptions::default()).unwrap();
-
-    let kernel_version = get_kernel_version().unwrap();
-    let mut version_parts = kernel_version.split('.');
-    let major = version_parts.next().unwrap();
-    let minor = version_parts.next().unwrap();
-    println!("Major: {major}, minor: {minor}");
-
-    // Get all available linux-image packages
-    let packages = run_cmd(
-        "apt-cache",
-        ["search", "linux-image"],
-        CommandOptions::default(),
-    )
-    .unwrap()
-    .stdout;
-
-    // Find the newest version matching our major.minor
-    let prefix = format!("linux-image-{}.{}", major, minor);
-    println!("Searching for prefix: {prefix}");
-
-    let mut max_patch = 0;
-    let mut max_micro = 0;
-
-    for line in packages.lines() {
-        let package_name = line.split_whitespace().next().unwrap_or("");
-        if let Some((patch, micro)) = parse_kernel_package(package_name, &prefix, kernel_suffix) {
-            if patch > max_patch || (patch == max_patch && micro > max_micro) {
-                max_patch = patch;
-                max_micro = micro;
-            }
-        }
-    }
-
-    let wanted_kernel_version = kernel_version_format
-        .replace("{major}", major)
-        .replace("{minor}", minor)
-        .replace("{patch}", &max_patch.to_string())
-        .replace("{micro}", &max_micro.to_string());
-    println!("Wanted kernel version: {wanted_kernel_version}");
-
-    let wanted_kernel_package = kernel_image_package.replace("{version}", &wanted_kernel_version);
-    let wanted_kernel_headers = kernel_headers_package.replace("{version}", &wanted_kernel_version);
-    let wanted_kernel_modules_extra =
-        kernel_modules_extra_package.replace("{version}", &wanted_kernel_version);
-
-    // Check if the wanted kernel is already installed
-    let current_kernel = get_kernel_version().unwrap();
-    let is_kernel_installed =
-        current_kernel.contains(&format!("{}.{}.{}-{}", major, minor, max_patch, max_micro));
-
-    // Check if the headers are already installed
-    let headers_status = run_cmd(
-        "dpkg",
-        ["-s", wanted_kernel_headers.as_str()],
-        CommandOptions {
-            check: false,
-            silent: true,
-            ..Default::default()
-        },
-    )
-    .unwrap()
-    .status;
-    let are_headers_installed = headers_status.success();
-
-    let modules_status = run_cmd(
-        "dpkg",
-        ["-s", wanted_kernel_modules_extra.as_str()],
-        CommandOptions {
-            check: false,
-            silent: true,
-            ..Default::default()
-        },
-    )
-    .unwrap()
-    .status;
-    let are_modules_extra_installed = modules_status.success();
-
-    // If both kernel and headers are already installed, no need to reboot
-    if is_kernel_installed && are_headers_installed && are_modules_extra_installed {
-        println!("Required kernel, headers, and exra modules are already installed.");
-        return Ok(());
-    }
-
-    // Install the packages
-    run_cmd(
-        "apt-get",
-        [
-            "install",
-            "-y",
-            wanted_kernel_package.as_str(),
-            wanted_kernel_headers.as_str(),
-            wanted_kernel_modules_extra.as_str(),
-            "build-essential",
-            "dkms",
-            "software-properties-common",
-            "pciutils",
-        ],
-        CommandOptions::default(),
-    )
-    .unwrap();
-
-    if !is_kernel_installed {
-        println!("New kernel installed. System needs to reboot.");
-        Err(RebootRequired)
-    } else {
-        println!("Kernel already matches required version. No reboot needed.");
-        Ok(())
-    }
 }
 
 fn download_cuda_toolkit_installer(cuda_config: &CudaConfig) -> io::Result<PathBuf> {
@@ -590,7 +709,7 @@ fn verify_nccl_installation(install_dir: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn detect_cuda_home() -> io::Result<String> {
+pub(crate) fn detect_cuda_home() -> io::Result<String> {
     let default_cuda = Path::new("/usr/local/cuda");
     if default_cuda.exists() {
         return Ok(default_cuda.display().to_string());
@@ -687,4 +806,106 @@ fn cuda_postinstallation_actions(cuda_config: &CudaConfig) -> io::Result<()> {
 
     configure_persistanced_service()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn latest_cuda_is_the_default() {
+        assert_eq!(CudaVersion::default(), CudaVersion::V13_3_1);
+    }
+
+    #[test]
+    fn cuda_13_0_uses_the_pinned_gcp_kernel() {
+        let kernel =
+            KernelConfig::for_platform("ubuntu", "24.04", CloudProvider::Gcp, CudaVersion::V13_0_1)
+                .unwrap();
+
+        assert_eq!(kernel.version, "6.17.0-1022-gcp");
+        assert_eq!(kernel.image.version, "6.17.0-1022.25");
+        assert_eq!(kernel.modules.name, "linux-modules-6.17.0-1022-gcp");
+    }
+
+    #[test]
+    fn cuda_13_0_uses_the_pinned_aws_kernel() {
+        let kernel =
+            KernelConfig::for_platform("ubuntu", "24.04", CloudProvider::Aws, CudaVersion::V13_0_1)
+                .unwrap();
+
+        assert_eq!(kernel.version, "6.17.0-1020-aws");
+        assert_eq!(kernel.image.version, "6.17.0-1020.20~24.04.1+1");
+        assert_eq!(kernel.headers.version, "6.17.0-1020.20~24.04.1");
+        assert_eq!(kernel.modules.name, "linux-modules-6.17.0-1020-aws");
+    }
+
+    #[test]
+    fn cuda_13_3_uses_the_kernel_7_gcp_profile() {
+        let kernel =
+            KernelConfig::for_platform("ubuntu", "24.04", CloudProvider::Gcp, CudaVersion::V13_3_1)
+                .unwrap();
+
+        assert_eq!(kernel.version, "7.0.0-1011-gcp");
+        assert_eq!(kernel.image.version, "7.0.0-1011.11~24.04.1");
+        assert_eq!(kernel.modules.name, "linux-modules-7.0.0-1011-gcp");
+    }
+
+    #[test]
+    fn cuda_13_3_uses_the_kernel_7_aws_profile() {
+        let kernel =
+            KernelConfig::for_platform("ubuntu", "24.04", CloudProvider::Aws, CudaVersion::V13_3_1)
+                .unwrap();
+
+        assert_eq!(kernel.version, "7.0.0-1012-aws");
+        assert_eq!(kernel.image.version, "7.0.0-1012.12~24.04.1");
+        assert_eq!(kernel.modules.name, "linux-modules-7.0.0-1012-aws");
+    }
+
+    #[test]
+    fn newer_cuda_releases_match_their_installers() {
+        for (version, release, driver, checksum) in [
+            (
+                CudaVersion::V13_1_1,
+                "13.1.1",
+                "590.48.01",
+                "8aa93a77cffa8d055db0ceb9d0e2d692",
+            ),
+            (
+                CudaVersion::V13_2_1,
+                "13.2.1",
+                "595.58.03",
+                "e5b4bdf19cc27d63a8254cb486764626",
+            ),
+            (
+                CudaVersion::V13_3_1,
+                "13.3.1",
+                "610.43.02",
+                "7c8d3eca60ee10d2c290bdc045f88f09",
+            ),
+        ] {
+            let cuda = CudaConfig::new(version);
+
+            assert!(cuda.toolkit_url.contains(release));
+            assert!(cuda.toolkit_url.contains(driver));
+            assert_eq!(cuda.driver_version, driver);
+            assert_eq!(cuda.toolkit_checksum, checksum);
+        }
+    }
+
+    #[test]
+    fn cuda_12_8_driver_version_matches_its_installer() {
+        let cuda = CudaConfig::new(CudaVersion::V12_8);
+
+        assert_eq!(cuda.driver_version, "570.86.10");
+        assert!(cuda.toolkit_url.contains(&cuda.driver_version));
+    }
+
+    #[test]
+    fn unvalidated_distribution_is_rejected() {
+        let result =
+            KernelConfig::for_platform("ubuntu", "22.04", CloudProvider::Gcp, CudaVersion::V13_0_1);
+
+        assert!(result.is_err());
+    }
 }
